@@ -189,7 +189,7 @@ view: price_drop_candidates {
         WHEN {% parameter breakdown_by %} = 'fare_type' THEN ${fare_type}
         WHEN {% parameter breakdown_by %} = 'affiliate_id' THEN CAST(${affiliate_id} AS CHAR)
       END ;;
-    description: "Switches which contestant-info dimension this row groups by, based on the Breakdown By parameter above. Group a tile by this single field (instead of gds/office/carrier/etc. individually) to reproduce ci_pricedrop_bot's Breakdown Explorer tabs in one tile — switching the parameter re-groups the same tile instead of needing six separate ones."
+    description: "Switches which contestant-info dimension this row groups by, based on the Breakdown By parameter above. Group a tile by this single field (instead of gds/office/carrier/etc. individually) to reproduce ci_pricedrop_bot's Breakdown Explorer tabs in one tile — switching the parameter re-groups the same tile instead of needing six separate ones. For real clickable tabs in one tile, see the price_drop_breakdown_explorer custom visualization instead."
   }
 
   # -------------------------
@@ -236,10 +236,12 @@ view: price_drop_candidates {
   }
 
   dimension: extra_revenue {
-    hidden: yes
     type: number
+    value_format: "$#,##0.00"
+    group_label: "4. MONETARY"
+    label: "Extra Revenue (vs. Booked/Eligible)"
     sql: ${revenue} - COALESCE(${booked_revenue_on_attempt}, ${best_eligible_revenue_on_attempt}, 0) ;;
-    description: "This row's revenue minus whatever was actually booked on the attempt, or the best non-LowRevenue Eligible candidate if nothing was booked, or 0 if neither exists. Mirrors ci_pricedrop_bot's compute_comparison() baseline chain (booked -> best Eligible -> $0)."
+    description: "This row's revenue minus whatever was actually booked on the attempt, or the best non-LowRevenue Eligible candidate if nothing was booked, or 0 if neither exists. Mirrors ci_pricedrop_bot's compute_comparison() baseline chain (booked -> best Eligible -> $0). Made public 2026-09-08 (was hidden, used only inside extra_revenue_sum / extra_revenue_best_only_sum) so the price_drop_breakdown_explorer custom visualization can pull it row-level and re-aggregate client-side per tab."
   }
 
   # -------------------------
