@@ -160,6 +160,39 @@ view: price_drop_candidates {
   }
 
   # -------------------------
+  # 2b. BREAKDOWN SWITCHER
+  # -------------------------
+
+  parameter: breakdown_by {
+    type: string
+    label: "Breakdown By"
+    description: "Drives the breakdown dimension below — pick which contestant-info field a single tile groups by, instead of building one tile per field. Route is not available (would need a new ClickHouse join to jupiter_optimizer_attempt_summary, not present in this project)."
+    allowed_value: { label: "Content Source" value: "gds" }
+    allowed_value: { label: "Office" value: "office" }
+    allowed_value: { label: "Validating Carrier" value: "carrier" }
+    allowed_value: { label: "Currency" value: "currency" }
+    allowed_value: { label: "Fare Type" value: "fare_type" }
+    allowed_value: { label: "Affiliate ID" value: "affiliate_id" }
+    default_value: "gds"
+  }
+
+  dimension: breakdown {
+    label_from_parameter: breakdown_by
+    type: string
+    group_label: "2. CONTESTANT INFO"
+    sql:
+      CASE
+        WHEN {% parameter breakdown_by %} = 'gds' THEN ${gds}
+        WHEN {% parameter breakdown_by %} = 'office' THEN ${office}
+        WHEN {% parameter breakdown_by %} = 'carrier' THEN ${carrier}
+        WHEN {% parameter breakdown_by %} = 'currency' THEN ${currency}
+        WHEN {% parameter breakdown_by %} = 'fare_type' THEN ${fare_type}
+        WHEN {% parameter breakdown_by %} = 'affiliate_id' THEN CAST(${affiliate_id} AS CHAR)
+      END ;;
+    description: "Switches which contestant-info dimension this row groups by, based on the Breakdown By parameter above. Group a tile by this single field (instead of gds/office/carrier/etc. individually) to reproduce ci_pricedrop_bot's Breakdown Explorer tabs in one tile — switching the parameter re-groups the same tile instead of needing six separate ones."
+  }
+
+  # -------------------------
   # 3. BUCKETS
   # -------------------------
 
