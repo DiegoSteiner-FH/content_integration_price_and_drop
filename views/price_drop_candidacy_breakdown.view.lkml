@@ -4,12 +4,15 @@ view: price_drop_candidacy_breakdown {
   # contestant (any candidacy, no revenue floor, no per-attempt dedup) on a
   # content source that has at least one Dropped='Price Only' tag in the window
   # -- a much broader population than price_drop_candidates (Admissible only).
-  # Pre-aggregated to (date, gds, carrier, candidacy) inside the derived table
-  # itself, matching the bot's own ~1.5K-rows/day shipping strategy, instead of
-  # exposing the full ~75K-row/day contestant population to Looker. Verified
-  # 2026-09-08 against 2026-09-02: 74,722 total contestants, Admissible 7.29%,
-  # Incalculable 66.45%, Unbookable 20.53% -- matches ci_pricedrop_bot's
-  # Candidacy Breakdown tile exactly.
+  # Pre-aggregated to (date, gds, office, carrier, candidacy) inside the
+  # derived table itself, matching the bot's own ~1.5K-rows/day shipping
+  # strategy, instead of exposing the full ~75K-row/day contestant population
+  # to Looker. Verified 2026-09-08 against 2026-09-02: 74,722 total
+  # contestants, Admissible 7.29%, Incalculable 66.45%, Unbookable 20.53% --
+  # matches ci_pricedrop_bot's Candidacy Breakdown tile exactly. Office added
+  # 2026-09-08 (gds_account_id is a plain column on optimizer_candidates, no
+  # extra join) so this tile shares the Office dashboard filter with
+  # price_drop_candidates / price_drop_price_rate.
   derived_table: {
     sql:
       WITH active_pd_gds AS (
@@ -24,6 +27,7 @@ view: price_drop_candidacy_breakdown {
       SELECT
         DATE(oc.created_at) AS d,
         oc.gds,
+        oc.gds_account_id AS office_id,
         oc.validating_carrier AS carrier,
         CASE WHEN opc.id IS NOT NULL THEN 'Inadmissible' ELSE oc.candidacy END AS candidacy,
         COUNT(*) AS n
@@ -38,7 +42,7 @@ view: price_drop_candidacy_breakdown {
           WHERE oab.attempt_id = oc.attempt_id
             AND (b.is_test = 1 OR b.cancel_reason = 'test')
         )
-      GROUP BY DATE(oc.created_at), oc.gds, oc.validating_carrier, candidacy
+      GROUP BY DATE(oc.created_at), oc.gds, oc.gds_account_id, oc.validating_carrier, candidacy
     ;;
   }
 
@@ -65,6 +69,14 @@ view: price_drop_candidacy_breakdown {
     label: "Content Source"
     sql: ${TABLE}.gds ;;
     description: "Content source (GDS) that has at least one Dropped='Price Only'-tagged candidate in the query window -- not restricted to the 5 sources ci_pricedrop_bot's other tiles focus on, since this covers every candidacy, not just Admissible ones."
+  }
+
+  dimension: office {
+    type: string
+    group_label: "2. CONTESTANT INFO"
+    label: "Office Id"
+    sql: ${TABLE}.office_id ;;
+    description: "GDS account / office ID of the contestant (ota.optimizer_candidates.gds_account_id)."
   }
 
   dimension: carrier {
