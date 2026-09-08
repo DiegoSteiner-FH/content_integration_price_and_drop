@@ -27,7 +27,7 @@ view: price_drop_candidates {
     timeframes: [date, week, month, quarter, year, raw]
     sql: ${TABLE}.created_at ;;
     group_label: "1. DATE"
-    label: "Candidate Created"
+    label: "Created"
     description: "Optimizer candidate's created_at timestamp (stored UTC). ci_pricedrop_bot's own report labels itself America/Toronto but never actually converts before querying (its strftime() on a tz-aware datetime just formats the naive wall-clock fields) — so its real window is the literal date string, same as this dimension. Verified 2026-09-08 against 2026-09-02: literal UTC-style day boundary reproduces the bot's Profitable Opportunities figures ($103,072.31 / 3,128 / $32.95 avg) exactly."
   }
 
@@ -47,7 +47,7 @@ view: price_drop_candidates {
   dimension: office {
     type: string
     group_label: "2. CONTESTANT INFO"
-    label: "Office"
+    label: "Office Id"
     sql: ${TABLE}.gds_account_id ;;
     description: "GDS account / office ID of the candidate (ota.optimizer_candidates.gds_account_id)."
   }
