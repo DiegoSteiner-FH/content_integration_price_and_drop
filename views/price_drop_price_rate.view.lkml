@@ -10,12 +10,12 @@ view: price_drop_price_rate {
   # that Admissible-only slice; this is a genuinely different "booked"
   # definition for this broader population, matching the bot's own
   # PRICE_RATE_SQL exactly) then best non-LowRevenue Eligible candidate, then
-  # null ("no_price"). Pre-aggregated to (date, gds, office, carrier, outcome)
-  # inside the derived table, same size rationale as
-  # price_drop_candidacy_breakdown. Verified 2026-09-08 against 2026-09-02:
-  # 74,722 total contestants, no_price 68.46%, worse ~24.8%, better ~6.3%,
-  # same ~0.37% -- matches ci_pricedrop_bot's Price Rate tile (small %
-  # rounding differences only, total exact).
+  # null ("no_price"). Pre-aggregated to (date, gds, office, carrier,
+  # fare_type, currency, affiliate_id, outcome) inside the derived table, same
+  # size rationale as price_drop_candidacy_breakdown. Verified 2026-09-08
+  # against 2026-09-02: 74,722 total contestants, no_price 68.46%, worse
+  # ~24.8%, better ~6.3%, same ~0.37% -- matches ci_pricedrop_bot's Price Rate
+  # tile (small % rounding differences only, total exact).
   #
   # Why (2026-09-08, DS), active_pd_gds fix: originally computed once across
   # the whole outer date-filtered range, then joined against every day's row
@@ -30,6 +30,12 @@ view: price_drop_price_rate {
   # 2026-09-02..09-07 after the fix: 74722 / 635895 / 578748 / 467893 /
   # 458624 / 530900 total contestants per day -- all match a live 7-day
   # window query exactly.
+  #
+  # Why (2026-09-08, DS), fare_type/currency/affiliate_id added: affiliate_id
+  # does not exist on ota.optimizer_candidates -- it lives on
+  # ota.optimizer_attempts, joined via attempt_id. Grain measured (correctly
+  # scoped to active_pd_gds_by_date) at 2,057 -> 13,819 rows for 2026-09-02
+  # after adding all three -- small enough to stay fast.
   derived_table: {
     sql:
       WITH active_pd_gds_by_date AS (
@@ -44,9 +50,11 @@ view: price_drop_price_rate {
       contestants AS (
         SELECT
           oc.id AS candidate_id, oc.attempt_id, oc.gds, oc.gds_account_id AS office_id,
-          oc.validating_carrier AS carrier, oc.revenue, DATE(oc.created_at) AS d
+          oc.validating_carrier AS carrier, oc.fare_type, oc.currency, oa.affiliate_id,
+          oc.revenue, DATE(oc.created_at) AS d
         FROM ota.optimizer_candidates oc
         JOIN active_pd_gds_by_date ag ON ag.gds = oc.gds AND ag.d = DATE(oc.created_at)
+        JOIN ota.optimizer_attempts oa ON oa.id = oc.attempt_id
         WHERE {% condition price_drop_price_rate.date_date %} oc.created_at {% endcondition %}
           AND NOT EXISTS (
             SELECT 1 FROM ota.optimizer_attempt_bookings oab
@@ -88,6 +96,9 @@ view: price_drop_price_rate {
         ct.gds,
         ct.office_id,
         ct.carrier,
+        ct.fare_type,
+        ct.currency,
+        ct.affiliate_id,
         CASE
           WHEN ct.revenue IS NULL THEN 'no_price'
           WHEN ct.revenue > COALESCE(bk.booked_revenue, be.best_eligible_revenue, 0) THEN 'better'
@@ -98,7 +109,7 @@ view: price_drop_price_rate {
       FROM contestants ct
       LEFT JOIN booked bk ON bk.attempt_id = ct.attempt_id
       LEFT JOIN best_eligible be ON be.attempt_id = ct.attempt_id
-      GROUP BY ct.d, ct.gds, ct.office_id, ct.carrier, outcome
+      GROUP BY ct.d, ct.gds, ct.office_id, ct.carrier, ct.fare_type, ct.currency, ct.affiliate_id, outcome
     ;;
   }
 
@@ -141,6 +152,30 @@ view: price_drop_price_rate {
     label: "Validating Carrier"
     sql: ${TABLE}.carrier ;;
     description: "Validating carrier of the contestant."
+  }
+
+  dimension: fare_type {
+    type: string
+    group_label: "2. CONTESTANT INFO"
+    label: "Fare Type"
+    sql: ${TABLE}.fare_type ;;
+    description: "Fare type of the contestant (ota.optimizer_candidates.fare_type)."
+  }
+
+  dimension: currency {
+    type: string
+    group_label: "2. CONTESTANT INFO"
+    label: "Currency"
+    sql: ${TABLE}.currency ;;
+    description: "Contestant's own currency (ota.optimizer_candidates.currency)."
+  }
+
+  dimension: affiliate_id {
+    type: number
+    group_label: "2. CONTESTANT INFO"
+    label: "Affiliate ID"
+    sql: ${TABLE}.affiliate_id ;;
+    description: "Affiliate the search attempt belongs to (ota.optimizer_attempts.affiliate_id, joined via attempt_id)."
   }
 
   # -------------------------

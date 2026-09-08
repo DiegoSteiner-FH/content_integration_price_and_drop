@@ -8,18 +8,26 @@ view: price_drop_candidacy_breakdown {
   # through a multi-day window gets counted as active retroactively for every
   # earlier day too). A much broader population than price_drop_candidates
   # (Admissible only). Pre-aggregated to (date, gds, office, carrier,
-  # candidacy) inside the derived table itself, matching the bot's own
-  # ~1.5K-rows/day shipping strategy, instead of exposing the full
-  # ~75K-row/day contestant population to Looker. Verified 2026-09-08 against
-  # 2026-09-02: 74,722 total contestants, Admissible 7.29%, Incalculable
-  # 66.45%, Unbookable 20.53% -- matches ci_pricedrop_bot's Candidacy
-  # Breakdown tile exactly. Re-verified 2026-09-08 across 2026-09-02..09-07
-  # after the active_pd_gds per-day fix: 74722 / 635895 / 578748 / 467893 /
-  # 458624 / 530900 -- all six days match a live 7-day-window query exactly,
-  # including 09-02 which was wrong (636,208) before this fix because
-  # 'amadeus' only started carrying a Dropped='Price Only' tag on 09-03
-  # onward and was incorrectly back-applied to 09-02 under the old
-  # whole-window active_pd_gds.
+  # fare_type, currency, affiliate_id, candidacy) inside the derived table
+  # itself, matching the bot's own ~1.5K-rows/day shipping strategy, instead of
+  # exposing the full ~75K-row/day contestant population to Looker. Verified
+  # 2026-09-08 against 2026-09-02: 74,722 total contestants, Admissible 7.29%,
+  # Incalculable 66.45%, Unbookable 20.53% -- matches ci_pricedrop_bot's
+  # Candidacy Breakdown tile exactly. Re-verified 2026-09-08 across
+  # 2026-09-02..09-07 after the active_pd_gds per-day fix: 74722 / 635895 /
+  # 578748 / 467893 / 458624 / 530900 -- all six days match a live 7-day-
+  # window query exactly, including 09-02 which was wrong (636,208) before
+  # that fix because 'amadeus' only started carrying a Dropped='Price Only'
+  # tag on 09-03 onward and was incorrectly back-applied to 09-02 under the
+  # old whole-window active_pd_gds.
+  #
+  # Why (2026-09-08, DS), fare_type/currency/affiliate_id added: affiliate_id
+  # does not exist on ota.optimizer_candidates (same gotcha fixed earlier on
+  # price_drop_candidates) -- it lives on ota.optimizer_attempts, joined via
+  # attempt_id. Grain measured (correctly scoped to active_pd_gds_by_date,
+  # not the whole optimizer_candidates table) at 2,057 -> 13,819 rows for
+  # 2026-09-02 after adding all three -- small enough to stay fast. SUM(n)
+  # still equals 74,722 for that day, confirming no value regression.
   derived_table: {
     sql:
       WITH active_pd_gds_by_date AS (
@@ -36,10 +44,14 @@ view: price_drop_candidacy_breakdown {
         oc.gds,
         oc.gds_account_id AS office_id,
         oc.validating_carrier AS carrier,
+        oc.fare_type,
+        oc.currency,
+        oa.affiliate_id,
         CASE WHEN opc.id IS NOT NULL THEN 'Inadmissible' ELSE oc.candidacy END AS candidacy,
         COUNT(*) AS n
       FROM ota.optimizer_candidates oc
       JOIN active_pd_gds_by_date ag ON ag.gds = oc.gds AND ag.d = DATE(oc.created_at)
+      JOIN ota.optimizer_attempts oa ON oa.id = oc.attempt_id
       LEFT JOIN ota.optimizer_candidates opc
         ON opc.id = oc.parent_id AND opc.reprice_type = 'single_to_multi'
       WHERE {% condition price_drop_candidacy_breakdown.date_date %} oc.created_at {% endcondition %}
@@ -49,7 +61,7 @@ view: price_drop_candidacy_breakdown {
           WHERE oab.attempt_id = oc.attempt_id
             AND (b.is_test = 1 OR b.cancel_reason = 'test')
         )
-      GROUP BY DATE(oc.created_at), oc.gds, oc.gds_account_id, oc.validating_carrier, candidacy
+      GROUP BY DATE(oc.created_at), oc.gds, oc.gds_account_id, oc.validating_carrier, oc.fare_type, oc.currency, oa.affiliate_id, candidacy
     ;;
   }
 
@@ -92,6 +104,30 @@ view: price_drop_candidacy_breakdown {
     label: "Validating Carrier"
     sql: ${TABLE}.carrier ;;
     description: "Validating carrier of the contestant."
+  }
+
+  dimension: fare_type {
+    type: string
+    group_label: "2. CONTESTANT INFO"
+    label: "Fare Type"
+    sql: ${TABLE}.fare_type ;;
+    description: "Fare type of the contestant (ota.optimizer_candidates.fare_type)."
+  }
+
+  dimension: currency {
+    type: string
+    group_label: "2. CONTESTANT INFO"
+    label: "Currency"
+    sql: ${TABLE}.currency ;;
+    description: "Contestant's own currency (ota.optimizer_candidates.currency)."
+  }
+
+  dimension: affiliate_id {
+    type: number
+    group_label: "2. CONTESTANT INFO"
+    label: "Affiliate ID"
+    sql: ${TABLE}.affiliate_id ;;
+    description: "Affiliate the search attempt belongs to (ota.optimizer_attempts.affiliate_id, joined via attempt_id -- this column does not exist on ota.optimizer_candidates itself)."
   }
 
   # -------------------------
