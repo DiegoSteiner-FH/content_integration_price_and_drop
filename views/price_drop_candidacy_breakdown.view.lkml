@@ -2,21 +2,28 @@ view: price_drop_candidacy_breakdown {
   # Why (2026-09-08, DS): rule 1 escape hatch -- ports ci_pricedrop_bot's
   # CANDIDACY_BREAKDOWN_SQL (generate_report.py) directly. Population is EVERY
   # contestant (any candidacy, no revenue floor, no per-attempt dedup) on a
-  # content source that has at least one Dropped='Price Only' tag in the window
-  # -- a much broader population than price_drop_candidates (Admissible only).
-  # Pre-aggregated to (date, gds, office, carrier, candidacy) inside the
-  # derived table itself, matching the bot's own ~1.5K-rows/day shipping
-  # strategy, instead of exposing the full ~75K-row/day contestant population
-  # to Looker. Verified 2026-09-08 against 2026-09-02: 74,722 total
-  # contestants, Admissible 7.29%, Incalculable 66.45%, Unbookable 20.53% --
-  # matches ci_pricedrop_bot's Candidacy Breakdown tile exactly. Office added
-  # 2026-09-08 (gds_account_id is a plain column on optimizer_candidates, no
-  # extra join) so this tile shares the Office dashboard filter with
-  # price_drop_candidates / price_drop_price_rate.
+  # content source that has at least one Dropped='Price Only' tag on THAT SAME
+  # DAY (see active_pd_gds_by_date below -- this must be scoped per-day, not
+  # over the whole queried range, or a GDS that only becomes active partway
+  # through a multi-day window gets counted as active retroactively for every
+  # earlier day too). A much broader population than price_drop_candidates
+  # (Admissible only). Pre-aggregated to (date, gds, office, carrier,
+  # candidacy) inside the derived table itself, matching the bot's own
+  # ~1.5K-rows/day shipping strategy, instead of exposing the full
+  # ~75K-row/day contestant population to Looker. Verified 2026-09-08 against
+  # 2026-09-02: 74,722 total contestants, Admissible 7.29%, Incalculable
+  # 66.45%, Unbookable 20.53% -- matches ci_pricedrop_bot's Candidacy
+  # Breakdown tile exactly. Re-verified 2026-09-08 across 2026-09-02..09-07
+  # after the active_pd_gds per-day fix: 74722 / 635895 / 578748 / 467893 /
+  # 458624 / 530900 -- all six days match a live 7-day-window query exactly,
+  # including 09-02 which was wrong (636,208) before this fix because
+  # 'amadeus' only started carrying a Dropped='Price Only' tag on 09-03
+  # onward and was incorrectly back-applied to 09-02 under the old
+  # whole-window active_pd_gds.
   derived_table: {
     sql:
-      WITH active_pd_gds AS (
-        SELECT DISTINCT oc.gds
+      WITH active_pd_gds_by_date AS (
+        SELECT DISTINCT DATE(oct.created_at) AS d, oc.gds
         FROM ota.optimizer_candidates oc
         JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
          AND {% condition price_drop_candidacy_breakdown.date_date %} oct.created_at {% endcondition %}
@@ -32,7 +39,7 @@ view: price_drop_candidacy_breakdown {
         CASE WHEN opc.id IS NOT NULL THEN 'Inadmissible' ELSE oc.candidacy END AS candidacy,
         COUNT(*) AS n
       FROM ota.optimizer_candidates oc
-      JOIN active_pd_gds ag ON ag.gds = oc.gds
+      JOIN active_pd_gds_by_date ag ON ag.gds = oc.gds AND ag.d = DATE(oc.created_at)
       LEFT JOIN ota.optimizer_candidates opc
         ON opc.id = oc.parent_id AND opc.reprice_type = 'single_to_multi'
       WHERE {% condition price_drop_candidacy_breakdown.date_date %} oc.created_at {% endcondition %}
@@ -68,7 +75,7 @@ view: price_drop_candidacy_breakdown {
     group_label: "2. CONTESTANT INFO"
     label: "Content Source"
     sql: ${TABLE}.gds ;;
-    description: "Content source (GDS) that has at least one Dropped='Price Only'-tagged candidate in the query window -- not restricted to the 5 sources ci_pricedrop_bot's other tiles focus on, since this covers every candidacy, not just Admissible ones."
+    description: "Content source (GDS) that has at least one Dropped='Price Only'-tagged candidate on this same day -- not restricted to the 5 sources ci_pricedrop_bot's other tiles focus on, since this covers every candidacy, not just Admissible ones."
   }
 
   dimension: office {
