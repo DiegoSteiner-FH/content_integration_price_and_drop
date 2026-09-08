@@ -28,7 +28,7 @@ view: price_drop_candidates {
     sql: ${TABLE}.created_at ;;
     group_label: "1. DATE"
     label: "Candidate Created"
-    description: "Optimizer candidate's created_at timestamp (stored UTC). ci_pricedrop_bot's own report runs one America/Toronto calendar day at a time — apply a timezone-aware filter if reconciling day-for-day against that report."
+    description: "Optimizer candidate's created_at timestamp (stored UTC). ci_pricedrop_bot's own report labels itself America/Toronto but never actually converts before querying (its strftime() on a tz-aware datetime just formats the naive wall-clock fields) — so its real window is the literal date string, same as this dimension. Verified 2026-09-08 against 2026-09-02: literal UTC-style day boundary reproduces the bot's Profitable Opportunities figures ($103,072.31 / 3,128 / $32.95 avg) exactly."
   }
 
   # -------------------------
@@ -174,6 +174,16 @@ view: price_drop_candidates {
     description: "Simulated Price & Drop revenue of this candidate."
   }
 
+  # Why (2026-09-08, DS): must NOT filter to booking_id IS NOT NULL and must
+  # order by revenue DESC before LIMIT 1 -- ci_pricedrop_bot's own booked_ranked
+  # CTE treats ANY row in ota.optimizer_attempt_bookings for the attempt as the
+  # "booked" baseline (ROW_NUMBER() ... ORDER BY bc.revenue DESC, bc.id ASC),
+  # including the 183,312 rows across the table where booking_id IS NULL
+  # (attempted-but-not-finalized bookings). An earlier version of this
+  # dimension wrongly excluded those, which shifted the booked-vs-eligible
+  # baseline for a subset of attempts. Verified 2026-09-08 against 2026-09-02:
+  # this exact logic reproduces the dashboard's "Extra vs. Booked/Eligible"
+  # figure to the penny ($22,664.02, profitable rows only).
   dimension: booked_revenue_on_attempt {
     hidden: yes
     type: number
@@ -182,10 +192,10 @@ view: price_drop_candidates {
       FROM ota.optimizer_attempt_bookings oab
       INNER JOIN ota.optimizer_candidates ocb ON ocb.id = oab.candidate_id
       WHERE oab.attempt_id = ${TABLE}.attempt_id
-        AND oab.booking_id IS NOT NULL
+      ORDER BY ocb.revenue DESC, ocb.id ASC
       LIMIT 1
     ) ;;
-    description: "Revenue of whatever was actually booked on this attempt, if anything — hidden helper for extra_revenue."
+    description: "Revenue of the highest-revenue candidate in ota.optimizer_attempt_bookings for this attempt (any row, not just a finalized booking_id) — hidden helper for extra_revenue. Matches ci_pricedrop_bot's own booked_ranked CTE exactly."
   }
 
   dimension: best_eligible_revenue_on_attempt {
