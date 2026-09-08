@@ -3,25 +3,42 @@
 // Why (2026-09-08, DS): reproduces ci_pricedrop_bot's own "Breakdown Explorer"
 // tab UI (GDS / Office / Carrier / Currency / Fare Type / Affiliate) as ONE
 // tile, matching the bot dashboard's client-side architecture -- pull
-// row-level data once, aggregate per tab entirely in JS, so switching tabs
-// never re-queries the database. Route is not included (no ClickHouse join
-// in this LookML project).
+// aggregated data once, re-aggregate per tab entirely in JS, so switching
+// tabs never re-queries the database. Route is not included (no ClickHouse
+// join in this LookML project).
+//
+// v2 (2026-09-08): reworked to consume the explore's own pre-aggregated
+// measures (grouped by all 6 contestant-info dims at once) instead of raw
+// per-row Revenue / Extra Revenue -- the user wanted the query built from
+// the same named measures already used elsewhere on the dashboard
+// (Admissible Candidates Count, Total Revenue, Extra Revenue (If Booked),
+// Extra Rev. (Best Only)) rather than two extra raw fields. Average Revenue
+// is NOT read from the query -- it's recomputed per tab as
+// sum(Total Revenue) / sum(Count) across whichever rows share that tab's
+// key, never as an average-of-averages (that would be mathematically wrong
+// once rows are re-grouped to a coarser key). Sums are safe to combine this
+// way because every row's Count is a distinct-attempt count over a set of
+// attempts that appears in exactly one (gds, office, carrier, currency,
+// fare_type, affiliate_id) combination -- no attempt can span two rows, so
+// no double-counting when summing across rows that share one dimension.
 //
 // Required fields, in this exact query (from the price_drop_candidates
-// explore, row-level, no pivots):
+// explore, grouped by all 6 dims below -- do NOT add Created Date as an
+// output column, only as a filter, or every tab will double-count across
+// dates instead of combining them):
 //   price_drop_candidates.gds
 //   price_drop_candidates.office
 //   price_drop_candidates.carrier
 //   price_drop_candidates.currency
 //   price_drop_candidates.fare_type
 //   price_drop_candidates.affiliate_id
-//   price_drop_candidates.revenue
-//   price_drop_candidates.extra_revenue
-//   price_drop_candidates.near_miss_bucket
+//   price_drop_candidates.admissible_candidates_count
+//   price_drop_candidates.revenue_sum
+//   price_drop_candidates.extra_revenue_sum
+//   price_drop_candidates.extra_revenue_best_only_sum
 //
-// Any measure fields in the query are ignored -- this viz recomputes count /
-// total revenue / avg revenue / extra revenue itself from the raw rows so
-// tab-switching is instant.
+// Average Revenue is optional in the query (ignored if present -- this viz
+// always recomputes it itself, see above).
 
 (function () {
   var VIEW = "price_drop_candidates";
@@ -35,12 +52,13 @@
     { key: "affiliate_id", label: "Affiliate", field: VIEW + ".affiliate_id" }
   ];
 
-  var REVENUE_FIELD = VIEW + ".revenue";
-  var EXTRA_REVENUE_FIELD = VIEW + ".extra_revenue";
-  var BUCKET_FIELD = VIEW + ".near_miss_bucket";
+  var COUNT_FIELD = VIEW + ".admissible_candidates_count";
+  var REVENUE_SUM_FIELD = VIEW + ".revenue_sum";
+  var EXTRA_SUM_FIELD = VIEW + ".extra_revenue_sum";
+  var EXTRA_BEST_FIELD = VIEW + ".extra_revenue_best_only_sum";
 
   var REQUIRED_FIELDS = TABS.map(function (t) { return t.field; })
-    .concat([REVENUE_FIELD, EXTRA_REVENUE_FIELD, BUCKET_FIELD]);
+    .concat([COUNT_FIELD, REVENUE_SUM_FIELD, EXTRA_SUM_FIELD, EXTRA_BEST_FIELD]);
 
   var CSS = "\
     .pd-be { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size: 13px; color: #111827; height: 100%; overflow: auto; }\
@@ -92,6 +110,11 @@
     return sign + "$" + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
+  // Re-aggregates the query's own pre-aggregated rows (grouped by all 6
+  // dims at once) down to just the one dimension the active tab represents.
+  // Sums are safe across rows sharing a tab key -- see the v2 note at the
+  // top of this file for why. Average is always recomputed from the summed
+  // total and summed count, never carried forward as an average-of-averages.
   function aggregateBy(rows, fieldName) {
     var groups = {};
     var order = [];
@@ -102,15 +125,10 @@
         order.push(key);
       }
       var g = groups[key];
-      var revenue = numVal(row[REVENUE_FIELD]);
-      var extra = numVal(row[EXTRA_REVENUE_FIELD]);
-      var bucket = strVal(row[BUCKET_FIELD], "");
-      g.count += 1;
-      g.totalRevenue += revenue;
-      g.extraIfBooked += extra;
-      if (bucket === "Profitable" && extra > 0) {
-        g.extraBestOnly += extra;
-      }
+      g.count += numVal(row[COUNT_FIELD]);
+      g.totalRevenue += numVal(row[REVENUE_SUM_FIELD]);
+      g.extraIfBooked += numVal(row[EXTRA_SUM_FIELD]);
+      g.extraBestOnly += numVal(row[EXTRA_BEST_FIELD]);
     });
     return order.map(function (key) {
       var g = groups[key];
@@ -152,7 +170,7 @@
       if (missing.length) {
         this.addError({
           title: "Missing required fields",
-          message: "Add these fields to the query (row-level, no pivots): " + missing.join(", ")
+          message: "Add these fields to the query (grouped by all 6 dims, Created Date as a filter only): " + missing.join(", ")
         });
         done();
         return;

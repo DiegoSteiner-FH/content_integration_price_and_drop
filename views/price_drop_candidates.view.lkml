@@ -241,7 +241,7 @@ view: price_drop_candidates {
     group_label: "4. MONETARY"
     label: "Extra Revenue (vs. Booked/Eligible)"
     sql: ${revenue} - COALESCE(${booked_revenue_on_attempt}, ${best_eligible_revenue_on_attempt}, 0) ;;
-    description: "This row's revenue minus whatever was actually booked on the attempt, or the best non-LowRevenue Eligible candidate if nothing was booked, or 0 if neither exists. Mirrors ci_pricedrop_bot's compute_comparison() baseline chain (booked -> best Eligible -> $0). Made public 2026-09-08 (was hidden, used only inside extra_revenue_sum / extra_revenue_best_only_sum) so the price_drop_breakdown_explorer custom visualization can pull it row-level and re-aggregate client-side per tab."
+    description: "This row's revenue minus whatever was actually booked on the attempt, or the best non-LowRevenue Eligible candidate if nothing was booked, or 0 if neither exists. Mirrors ci_pricedrop_bot's compute_comparison() baseline chain (booked -> best Eligible -> $0). Made public 2026-09-08 (was hidden, used only inside extra_revenue_sum / extra_revenue_best_only_sum) so per-row analysis can use it directly; the price_drop_breakdown_explorer custom visualization no longer requires it (v2 uses pre-aggregated measures instead) but it stays public since it's independently useful."
   }
 
   # -------------------------
@@ -254,6 +254,14 @@ view: price_drop_candidates {
     group_label: "5. COUNTS"
     label: "Admissible Candidates Count"
     description: "Count of distinct attempts with a de-duplicated Price & Drop Admissible candidate — one per attempt_id, matching ci_pricedrop_bot's headline count. Every row in this view already is that de-duped candidate (filtered inside the derived table above), so no additional CASE filter is needed."
+  }
+
+  measure: profitable_candidates_count {
+    type: count_distinct
+    sql: CASE WHEN ${near_miss_bucket} = 'Profitable' THEN ${attempt_id} END ;;
+    group_label: "5. COUNTS"
+    label: "Profitable Candidates"
+    description: "Count of de-duplicated Price & Drop Admissible candidates with revenue > 0 — matches ci_pricedrop_bot's 'Profitable Opportunities' KPI tile population exactly. Complements admissible_candidates_count (all three revenue buckets) and near_miss_count (near-miss bucket only). Formalizes a custom field the user built ad hoc (Admissible Candidates Count filtered to Revenue Bucket = Profitable) as a real measure."
   }
 
   measure: near_miss_count {
