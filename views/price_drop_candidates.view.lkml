@@ -268,6 +268,15 @@ view: price_drop_candidates {
     description: "Sum of extra_revenue across de-duplicated Price & Drop Admissible candidates — the incremental revenue these content sources would have added if live-booking instead of simulation-only, vs. what was actually booked or the best Eligible alternative."
   }
 
+  measure: extra_revenue_best_only_sum {
+    type: sum
+    sql: CASE WHEN ${near_miss_bucket} = 'Profitable' AND ${extra_revenue} > 0 THEN ${extra_revenue} END ;;
+    value_format: "$#,##0.00"
+    group_label: "6. REVENUE"
+    label: "Extra Rev. (Best Only)"
+    description: "Sum of extra_revenue, clipped to zero on rows where the price-drop candidate lost to its booked/eligible baseline, restricted to profitable rows — the incremental revenue if this content source only ever substituted in on searches where it's the best option (vs. extra_revenue_sum, which nets in the losing searches too). Matches ci_pricedrop_bot's dashboard 'Extra Rev. (Best Only)' KPI tile exactly (verified 2026-09-08 against 2026-09-02: $46,602.01)."
+  }
+
   measure: average_revenue {
     type: average
     sql: CASE WHEN ${is_price_drop_row} THEN ${revenue} END ;;
