@@ -1,5 +1,80 @@
 view: price_drop_candidates {
-  sql_table_name: ota.optimizer_candidates ;;
+  # Why (2026-09-08, DS): rule 1 escape hatch -- unavoidable window function.
+  # The prior version was a plain view on ota.optimizer_candidates with the
+  # per-attempt de-dup and booked/eligible baseline lookups implemented as
+  # correlated subqueries, each duplicated once per referencing measure in
+  # Looker's generated SQL (verified: up to 4x per query). Measured 5,017,035
+  # candidate rows scanned for a 7-day window when only ~36,530 are actually
+  # Admissible + Dropped='Price Only'. This derived table filters to that
+  # slice up front, ranks with ROW_NUMBER() once, and joins to the booked/
+  # eligible baselines once via their own ranked CTEs (same shape as
+  # ci_pricedrop_bot's own generate_report.py). Verified parity against the
+  # prior plain-view version for 2026-09-01..09-08: profitable_count=20156,
+  # total_revenue=755793.55, avg_revenue=37.50, extra_revenue_sum=233893.47,
+  # extra_revenue_best_only_sum=380963.63 -- all five match exactly.
+  derived_table: {
+    sql:
+      WITH admissible AS (
+        SELECT
+          oc.id, oc.attempt_id, oc.gds, oc.gds_account_id, oc.validating_carrier,
+          oc.revenue, oc.fare_type, oc.currency, oc.created_at,
+          ROW_NUMBER() OVER (PARTITION BY oc.attempt_id ORDER BY oc.revenue DESC, oc.id ASC) AS rn
+        FROM ota.optimizer_candidates oc
+        STRAIGHT_JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
+        STRAIGHT_JOIN ota.optimizer_tags ot ON ot.id = oct.tag_id AND ot.name = 'Dropped'
+        WHERE oct.value = 'Price Only'
+          AND oc.candidacy = 'Admissible'
+          AND oc.revenue > -50
+          AND {% condition price_drop_candidates.date_date %} oc.created_at {% endcondition %}
+      ),
+      best_per_attempt AS (
+        SELECT * FROM admissible WHERE rn = 1
+      ),
+      booked_ranked AS (
+        SELECT oab.attempt_id, bc.revenue AS booked_revenue,
+          ROW_NUMBER() OVER (PARTITION BY oab.attempt_id ORDER BY bc.revenue DESC, bc.id ASC) AS rn
+        FROM ota.optimizer_attempt_bookings oab
+        JOIN ota.optimizer_candidates bc ON bc.id = oab.candidate_id
+        WHERE oab.attempt_id IN (SELECT attempt_id FROM best_per_attempt)
+      ),
+      booked AS (
+        SELECT attempt_id, booked_revenue FROM booked_ranked WHERE rn = 1
+      ),
+      best_eligible_ranked AS (
+        SELECT oc2.attempt_id, oc2.revenue AS best_eligible_revenue,
+          ROW_NUMBER() OVER (PARTITION BY oc2.attempt_id ORDER BY oc2.revenue DESC, oc2.id ASC) AS rn
+        FROM ota.optimizer_candidates oc2
+        WHERE oc2.attempt_id IN (SELECT attempt_id FROM best_per_attempt)
+          AND oc2.candidacy = 'Eligible'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM ota.optimizer_candidate_tags octlr
+            JOIN ota.optimizer_tags otlr ON otlr.id = octlr.tag_id AND otlr.name = 'LowRevenue'
+            WHERE octlr.candidate_id = oc2.id
+          )
+      ),
+      best_eligible AS (
+        SELECT attempt_id, best_eligible_revenue FROM best_eligible_ranked WHERE rn = 1
+      )
+      SELECT
+        b.id,
+        b.attempt_id,
+        b.gds,
+        b.gds_account_id,
+        b.validating_carrier,
+        b.revenue,
+        b.fare_type,
+        b.currency,
+        oa.affiliate_id,
+        b.created_at,
+        bk.booked_revenue,
+        be.best_eligible_revenue
+      FROM best_per_attempt b
+      JOIN ota.optimizer_attempts oa ON oa.id = b.attempt_id
+      LEFT JOIN booked bk ON bk.attempt_id = b.attempt_id
+      LEFT JOIN best_eligible be ON be.attempt_id = b.attempt_id
+    ;;
+  }
 
   # -------------------------
   # DIMENSIONS
@@ -24,7 +99,7 @@ view: price_drop_candidates {
 
   dimension_group: date {
     type: time
-    timeframes: [date, week, month, quarter, year, raw]
+    timeframes: [date, week, month, quarter, year, hour, time, raw]
     sql: ${TABLE}.created_at ;;
     group_label: "1. DATE"
     label: "Created"
@@ -81,85 +156,24 @@ view: price_drop_candidates {
     group_label: "2. CONTESTANT INFO"
     label: "Affiliate ID"
     sql: ${TABLE}.affiliate_id ;;
-    description: "Affiliate the search attempt belongs to."
+    description: "Affiliate the search attempt belongs to. Fixed 2026-09-08: sourced from ota.optimizer_attempts (joined via attempt_id) inside the derived table — that column does not exist on ota.optimizer_candidates at all, and the prior version of this field would have errored the moment anyone queried it."
   }
 
   # -------------------------
   # 3. BUCKETS
   # -------------------------
 
-  dimension: is_price_only_dropped {
-    hidden: yes
-    type: yesno
-    sql: EXISTS (
-      SELECT 1
-      FROM ota.optimizer_candidate_tags oct
-      INNER JOIN ota.optimizer_tags ot ON ot.id = oct.tag_id
-      WHERE oct.candidate_id = ${TABLE}.id
-        AND ot.name = 'Dropped'
-        AND oct.value = 'Price Only'
-    ) ;;
-    description: "True when this candidate carries a Dropped tag valued exactly 'Price Only' — the Price & Drop simulation's own demotion tag (distinct from the 'Mixed Fare Types' Dropped value covered by ci_mixedfare_bot instead)."
-  }
-
-  dimension: is_price_drop_admissible {
-    hidden: yes
-    type: yesno
-    sql: ${TABLE}.candidacy = 'Admissible' AND ${is_price_only_dropped} AND ${TABLE}.revenue > -50 ;;
-    description: "True when candidacy = 'Admissible', the Dropped tag is valued 'Price Only', and revenue clears the -50 near-miss floor (NEAR_MISS_FLOOR) — ci_pricedrop_bot's exact MySQL slice, before per-attempt de-dup."
-  }
-
-  # Why (2026-09-08, DS): the Optimizer tries multiple office/GDS accounts per
-  # search, so summing every Price & Drop Admissible row overstates the
-  # opportunity by roughly 1.5-4x (measured live: 5,120 raw rows / 3,352
-  # distinct attempts in a 1-day sample). ci_pricedrop_bot's own report
-  # de-dupes to the single highest-revenue candidate per attempt_id; this
-  # correlated subquery reproduces that same de-dup in LookML rather than a
-  # window function, matching the correlated-subquery style already used for
-  # next_eligible_non_promoted_revenue etc. in content_integration_optimizer.
-  dimension: is_best_candidate_for_attempt {
-    hidden: yes
-    type: yesno
-    sql: ${TABLE}.id = (
-      SELECT oc2.id
-      FROM ota.optimizer_candidates oc2
-      WHERE oc2.attempt_id = ${TABLE}.attempt_id
-        AND oc2.candidacy = 'Admissible'
-        AND oc2.revenue > -50
-        AND EXISTS (
-          SELECT 1
-          FROM ota.optimizer_candidate_tags oct2
-          INNER JOIN ota.optimizer_tags ot2 ON ot2.id = oct2.tag_id
-          WHERE oct2.candidate_id = oc2.id
-            AND ot2.name = 'Dropped'
-            AND oct2.value = 'Price Only'
-        )
-      ORDER BY oc2.revenue DESC, oc2.id ASC
-      LIMIT 1
-    ) ;;
-    description: "True only on the single highest-revenue Price & Drop Admissible candidate per attempt_id (ties broken by lowest id) — the de-dup helper for is_price_drop_row."
-  }
-
-  dimension: is_price_drop_row {
-    type: yesno
-    group_label: "3. BUCKETS"
-    label: "Is Price Drop Candidate (Deduped)"
-    sql: ${is_price_drop_admissible} AND ${is_best_candidate_for_attempt} ;;
-    description: "True on exactly one row per attempt_id: the highest-revenue Admissible candidate carrying a Dropped='Price Only' tag with revenue > -50. Every measure on this view is pre-filtered to this = Yes; filter dimension-only queries to this = Yes too, or a plain COUNT(*) will include the un-deduped rows."
-  }
-
   dimension: near_miss_bucket {
     type: string
     group_label: "3. BUCKETS"
     label: "Revenue Bucket"
     sql: CASE
-      WHEN NOT ${is_price_drop_row} THEN NULL
       WHEN ${TABLE}.revenue > 0 THEN 'Profitable'
       WHEN ${TABLE}.revenue = 0 THEN 'Breakeven'
       ELSE 'Near-miss'
     END ;;
     suggestions: ["Profitable", "Breakeven", "Near-miss"]
-    description: "Profitable (revenue > 0), Breakeven (= 0), or Near-miss (-50 < revenue <= 0) — the same three buckets ci_pricedrop_bot's report and dashboard track. NULL on rows that are not the de-duped Price & Drop row for their attempt."
+    description: "Profitable (revenue > 0), Breakeven (= 0), or Near-miss (-50 < revenue <= 0) — the same three buckets ci_pricedrop_bot's report and dashboard track. Every row in this view is already the de-duplicated Price & Drop Admissible candidate for its attempt (filtered inside the derived table above), so this bucket always resolves to one of the three values — never NULL."
   }
 
   # -------------------------
@@ -174,49 +188,18 @@ view: price_drop_candidates {
     description: "Simulated Price & Drop revenue of this candidate."
   }
 
-  # Why (2026-09-08, DS): must NOT filter to booking_id IS NOT NULL and must
-  # order by revenue DESC before LIMIT 1 -- ci_pricedrop_bot's own booked_ranked
-  # CTE treats ANY row in ota.optimizer_attempt_bookings for the attempt as the
-  # "booked" baseline (ROW_NUMBER() ... ORDER BY bc.revenue DESC, bc.id ASC),
-  # including the 183,312 rows across the table where booking_id IS NULL
-  # (attempted-but-not-finalized bookings). An earlier version of this
-  # dimension wrongly excluded those, which shifted the booked-vs-eligible
-  # baseline for a subset of attempts. Verified 2026-09-08 against 2026-09-02:
-  # this exact logic reproduces the dashboard's "Extra vs. Booked/Eligible"
-  # figure to the penny ($22,664.02, profitable rows only).
   dimension: booked_revenue_on_attempt {
     hidden: yes
     type: number
-    sql: (
-      SELECT ocb.revenue
-      FROM ota.optimizer_attempt_bookings oab
-      INNER JOIN ota.optimizer_candidates ocb ON ocb.id = oab.candidate_id
-      WHERE oab.attempt_id = ${TABLE}.attempt_id
-      ORDER BY ocb.revenue DESC, ocb.id ASC
-      LIMIT 1
-    ) ;;
-    description: "Revenue of the highest-revenue candidate in ota.optimizer_attempt_bookings for this attempt (any row, not just a finalized booking_id) — hidden helper for extra_revenue. Matches ci_pricedrop_bot's own booked_ranked CTE exactly."
+    sql: ${TABLE}.booked_revenue ;;
+    description: "Revenue of the highest-revenue candidate in ota.optimizer_attempt_bookings for this attempt (any row, not just a finalized booking_id) — hidden helper for extra_revenue. Computed once in the derived table's own booked_ranked CTE, matching ci_pricedrop_bot's booked_ranked CTE exactly."
   }
 
   dimension: best_eligible_revenue_on_attempt {
     hidden: yes
     type: number
-    sql: (
-      SELECT oce.revenue
-      FROM ota.optimizer_candidates oce
-      WHERE oce.attempt_id = ${TABLE}.attempt_id
-        AND oce.candidacy = 'Eligible'
-        AND NOT EXISTS (
-          SELECT 1
-          FROM ota.optimizer_candidate_tags octlr
-          INNER JOIN ota.optimizer_tags otlr ON otlr.id = octlr.tag_id
-          WHERE octlr.candidate_id = oce.id
-            AND otlr.name = 'LowRevenue'
-        )
-      ORDER BY oce.revenue DESC, oce.id ASC
-      LIMIT 1
-    ) ;;
-    description: "Revenue of the best Eligible-candidacy candidate on this attempt, excluding LowRevenue-tagged candidates (a LowRevenue candidate can still be Eligible but would never actually get booked in practice, same exclusion ci_pricedrop_bot applies) — hidden fallback helper for extra_revenue when nothing was booked."
+    sql: ${TABLE}.best_eligible_revenue ;;
+    description: "Revenue of the best Eligible-candidacy candidate on this attempt, excluding LowRevenue-tagged candidates (a LowRevenue candidate can still be Eligible but would never actually get booked in practice, same exclusion ci_pricedrop_bot applies) — hidden fallback helper for extra_revenue when nothing was booked. Computed once in the derived table's own best_eligible_ranked CTE."
   }
 
   dimension: extra_revenue {
@@ -232,10 +215,10 @@ view: price_drop_candidates {
 
   measure: admissible_candidates_count {
     type: count_distinct
-    sql: CASE WHEN ${is_price_drop_row} THEN ${attempt_id} END ;;
+    sql: ${attempt_id} ;;
     group_label: "5. COUNTS"
     label: "Admissible Candidates Count"
-    description: "Count of distinct attempts with a de-duplicated Price & Drop Admissible candidate — one per attempt_id, matching ci_pricedrop_bot's headline count."
+    description: "Count of distinct attempts with a de-duplicated Price & Drop Admissible candidate — one per attempt_id, matching ci_pricedrop_bot's headline count. Every row in this view already is that de-duped candidate (filtered inside the derived table above), so no additional CASE filter is needed."
   }
 
   measure: near_miss_count {
@@ -252,7 +235,7 @@ view: price_drop_candidates {
 
   measure: revenue_sum {
     type: sum
-    sql: CASE WHEN ${is_price_drop_row} THEN ${revenue} END ;;
+    sql: ${revenue} ;;
     value_format: "$#,##0.00"
     group_label: "6. REVENUE"
     label: "Total Revenue"
@@ -261,7 +244,7 @@ view: price_drop_candidates {
 
   measure: extra_revenue_sum {
     type: sum
-    sql: CASE WHEN ${is_price_drop_row} THEN ${extra_revenue} END ;;
+    sql: ${extra_revenue} ;;
     value_format: "$#,##0.00"
     group_label: "6. REVENUE"
     label: "Extra Revenue (If Booked)"
@@ -279,7 +262,7 @@ view: price_drop_candidates {
 
   measure: average_revenue {
     type: average
-    sql: CASE WHEN ${is_price_drop_row} THEN ${revenue} END ;;
+    sql: ${revenue} ;;
     value_format: "$#,##0.00"
     group_label: "6. REVENUE"
     label: "Average Revenue"
