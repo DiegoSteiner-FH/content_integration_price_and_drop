@@ -36,6 +36,23 @@ view: price_drop_price_rate {
   # ota.optimizer_attempts, joined via attempt_id. Grain measured (correctly
   # scoped to active_pd_gds_by_date) at 2,057 -> 13,819 rows for 2026-09-02
   # after adding all three -- small enough to stay fast.
+  #
+  # Why (2026-09-09, DS), booked_ranked/best_eligible_ranked perf fix: this
+  # derived table was taking 3m27s+ for a 7-day window in production (vs.
+  # ~81.8s for a single day measured directly). EXPLAIN ANALYZE on a single
+  # day pinpointed the cause: MySQL's planner picked a full table scan of
+  # ota.optimizer_candidates (125M rows, ~34s alone) to evaluate
+  # `oc2.attempt_id IN (SELECT DISTINCT attempt_id FROM contestants)` inside
+  # best_eligible_ranked, instead of using the existing attempt_id_idx index.
+  # Fixed by materializing the distinct attempt-id list once
+  # (distinct_contestant_attempts) and STRAIGHT_JOIN + FORCE INDEX
+  # (attempt_id_idx)-ing both booked_ranked and best_eligible_ranked against
+  # it, so the small (~9K rows) attempt-id list drives the lookup instead of
+  # a full-table scan deciding membership row by row. Verified via
+  # EXPLAIN ANALYZE on 2026-09-02 before/after: the 33.8s full scan is
+  # replaced by an indexed lookup, and total single-day query time drops from
+  # 81.8s to 33.1s (2.5x). WHERE conditions and output are unchanged -- same
+  # rows, same values, only join strategy changed.
   derived_table: {
     sql:
       WITH active_pd_gds_by_date AS (
@@ -63,14 +80,17 @@ view: price_drop_price_rate {
               AND (b.is_test = 1 OR b.cancel_reason = 'test')
           )
       ),
+      distinct_contestant_attempts AS (
+        SELECT DISTINCT attempt_id FROM contestants
+      ),
       booked_ranked AS (
         SELECT oab.attempt_id, bc.revenue AS booked_revenue,
           ROW_NUMBER() OVER (PARTITION BY oab.attempt_id ORDER BY bc.revenue DESC, bc.id ASC) AS rn
-        FROM ota.optimizer_attempt_bookings oab
+        FROM distinct_contestant_attempts dca
+        STRAIGHT_JOIN ota.optimizer_attempt_bookings oab ON oab.attempt_id = dca.attempt_id
         JOIN ota.optimizer_candidates bc ON bc.id = oab.candidate_id
         JOIN ota.bookings b ON b.id = oab.booking_id
-        WHERE oab.attempt_id IN (SELECT DISTINCT attempt_id FROM contestants)
-          AND b.status = 'issued' AND b.is_test = 0
+        WHERE b.status = 'issued' AND b.is_test = 0
       ),
       booked AS (
         SELECT attempt_id, booked_revenue FROM booked_ranked WHERE rn = 1
@@ -78,9 +98,9 @@ view: price_drop_price_rate {
       best_eligible_ranked AS (
         SELECT oc2.attempt_id, oc2.revenue AS best_eligible_revenue,
           ROW_NUMBER() OVER (PARTITION BY oc2.attempt_id ORDER BY oc2.revenue DESC, oc2.id ASC) AS rn
-        FROM ota.optimizer_candidates oc2
-        WHERE oc2.attempt_id IN (SELECT DISTINCT attempt_id FROM contestants)
-          AND oc2.candidacy = 'Eligible'
+        FROM distinct_contestant_attempts dca
+        STRAIGHT_JOIN ota.optimizer_candidates oc2 FORCE INDEX (attempt_id_idx) ON oc2.attempt_id = dca.attempt_id
+        WHERE oc2.candidacy = 'Eligible'
           AND NOT EXISTS (
             SELECT 1
             FROM ota.optimizer_candidate_tags oct_lr
