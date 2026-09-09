@@ -39,6 +39,15 @@ view: price_drop_any_tag {
   # row now that this table is aggregated (no natural per-row identity like
   # attempt_id survives the aggregation). Adds no query cost; it's a string
   # concat of two already-selected columns, not a new join or subquery.
+  #
+  # Why (2026-09-09, DS), {% condition %} refs use price_drop_funnel, not
+  # price_drop_any_tag: this view is only ever used via `from:
+  # price_drop_any_tag` on the price_drop_funnel explore, which aliases
+  # every field reference to that explore's own name -- including {%
+  # condition %}/{% parameter %} liquid parameters inside this view's own
+  # derived_table SQL, not just always_filter/join sql_on in the model
+  # file (that mistake was already fixed once for the model file; missed
+  # this spot the first time).
   derived_table: {
     sql:
       WITH tagged AS (
@@ -48,10 +57,10 @@ view: price_drop_any_tag {
           ROW_NUMBER() OVER (PARTITION BY oc.attempt_id ORDER BY oc.revenue DESC, oc.id ASC) AS rn
         FROM ota.optimizer_candidates oc
         JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
-         AND {% condition price_drop_any_tag.date_date %} oct.created_at {% endcondition %}
+         AND {% condition price_drop_funnel.date_date %} oct.created_at {% endcondition %}
         JOIN ota.optimizer_tags ot ON ot.id = oct.tag_id AND ot.name = 'Dropped'
         WHERE oct.value = 'Price Only'
-          AND {% condition price_drop_any_tag.date_date %} oc.created_at {% endcondition %}
+          AND {% condition price_drop_funnel.date_date %} oc.created_at {% endcondition %}
       )
       SELECT d, gds, COUNT(*) AS n
       FROM tagged
