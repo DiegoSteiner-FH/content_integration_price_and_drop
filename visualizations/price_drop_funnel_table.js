@@ -13,7 +13,7 @@
 //   price_drop_candidates.date_date
 //   price_drop_candidates.gds
 //   price_drop_any_tag.attempts_with_price_drop_count
-//   price_drop_candidates.profitable_candidates_count
+//   price_drop_candidates.admissible_candidates_count
 //   price_drop_candidates.funnel_wins_count
 //   price_drop_candidates.funnel_win_extra_revenue_sum
 
@@ -21,7 +21,7 @@
   var DATE_FIELD = "price_drop_candidates.date_date";
   var GDS_FIELD = "price_drop_candidates.gds";
   var ANY_TAG_FIELD = "price_drop_any_tag.attempts_with_price_drop_count";
-  var ADMISSIBLE_FIELD = "price_drop_candidates.profitable_candidates_count";
+  var ADMISSIBLE_FIELD = "price_drop_candidates.admissible_candidates_count";
   var WINS_FIELD = "price_drop_candidates.funnel_wins_count";
   var EXTRA_REVENUE_FIELD = "price_drop_candidates.funnel_win_extra_revenue_sum";
 
