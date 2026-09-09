@@ -27,3 +27,9 @@ visualization: {
   label: "Price Drop Content Source Share"
   file: "visualizations/content_source_share.js"
 }
+
+visualization: {
+  id: "price_drop_attempt_examples_table"
+  label: "Price Drop Attempt Examples Table"
+  file: "visualizations/attempt_examples_table.js"
+}
