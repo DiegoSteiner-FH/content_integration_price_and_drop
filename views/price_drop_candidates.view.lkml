@@ -22,7 +22,7 @@ view: price_drop_candidates {
   # definition: 2,156 / $68,298.79 / $31.68) and 2026-09-03. See
   # near_miss_bucket and eligible_delta below for the mechanics.
   #
-  # Why (2026-09-09, DS), hard 60-day safety cap: this view is now also
+  # Why (2026-09-09, DS), hard 30-day safety cap: this view is now also
   # joined into the price_drop_funnel explore (from: price_drop_any_tag),
   # where {% condition price_drop_candidates.date_date %} below resolves to
   # "no filter" unless a query explicitly filters this exact field --
@@ -31,11 +31,12 @@ view: price_drop_candidates {
   # sources like 'abc', see the model file). Without ANY bound, this view's
   # own window-function chain would scan/rank every Admissible candidate in
   # the table's entire history -- confirmed to genuinely happen and take a
-  # very long time. The hard cap below is generous enough to never bind for
-  # any normal use of either explore (both default to a 7-day window) but
-  # keeps the worst case (no filter selected at all) to ~60 days instead of
-  # unbounded -- a pure derived-table-internal AND, so it can't reintroduce
-  # the outer-WHERE-clause problem the always_filter version had.
+  # very long time. Originally set to 60 days; measured 281.8s on the
+  # funnel explore (44 rows, 7-day display window) since that cap is the
+  # ONLY bound ever hit there -- shrunk to 30 days on request, still
+  # generous margin above either explore's 7-day default window, still a
+  # pure derived-table-internal AND, so it can't reintroduce the
+  # outer-WHERE-clause problem the always_filter version had.
   derived_table: {
     sql:
       WITH admissible AS (
@@ -49,7 +50,7 @@ view: price_drop_candidates {
         WHERE oct.value = 'Price Only'
           AND oc.candidacy = 'Admissible'
           AND oc.revenue > -50
-          AND oc.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)
+          AND oc.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
           AND {% condition price_drop_candidates.date_date %} oc.created_at {% endcondition %}
       ),
       best_per_attempt AS (
