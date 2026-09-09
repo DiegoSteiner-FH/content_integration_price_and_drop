@@ -17,7 +17,7 @@ explore: price_drop_candidates {
 
   join: price_drop_any_tag {
     view_label: "Price & Drop Funnel"
-    type: full_outer
+    type: left_outer
     relationship: many_to_one
     sql_on: ${price_drop_candidates.date_date} = ${price_drop_any_tag.date_date}
         AND ${price_drop_candidates.gds} = ${price_drop_any_tag.gds} ;;
