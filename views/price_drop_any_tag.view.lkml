@@ -23,15 +23,22 @@ view: price_drop_any_tag {
   # join first -- the tile was genuinely slow, not just cold-cache. Fixed by
   # pre-aggregating this derived table down to (date, gds) directly, same
   # pattern as price_drop_candidacy_breakdown / price_drop_price_rate --
-  # this side of the join is now a few dozen rows, not thousands. Dropped
-  # office/carrier/fare_type/currency/affiliate_id and the attempt_id
-  # primary key -- none were used outside this join key, and keeping any in
-  # the GROUP BY would reintroduce the same fan-out at smaller scale.
-  # attempts_with_price_drop_count changed from count_distinct(attempt_id)
-  # to sum(pre-aggregated count) -- same numeric result, since attempt_id
-  # was already deduped to one row per attempt via rn=1 (COUNT(*) per
-  # (d, gds) bucket = the prior COUNT(DISTINCT attempt_id)). Re-verified
-  # 2026-09-09 against 2026-09-08, gds='aerohub': still 2,670.
+  # this side of the join is now a few dozen rows, not thousands.
+  #
+  # Why (2026-09-09, DS), primary key restored: dropping attempt_id also
+  # dropped this view's only primary key. That silently broke
+  # attempts_with_price_drop_count -- price_drop_candidates still has many
+  # rows per (date, gds) (one per attempt), so summing this view's `n`
+  # across the join without a declared primary key to dedup against would
+  # inflate it by however many admissible rows share that date+gds; Looker
+  # refuses to run that unsafe SUM rather than return a wrong number, and
+  # silently drops the field from every query instead (confirmed: LookML
+  # validated fine, project was fully deployed, field was still missing
+  # from every query result). Fixed with a synthetic primary key -- a
+  # composite of the two group-by columns, which uniquely identifies one
+  # row now that this table is aggregated (no natural per-row identity like
+  # attempt_id survives the aggregation). Adds no query cost; it's a string
+  # concat of two already-selected columns, not a new join or subquery.
   derived_table: {
     sql:
       WITH tagged AS (
@@ -51,6 +58,13 @@ view: price_drop_any_tag {
       WHERE rn = 1
       GROUP BY d, gds
     ;;
+  }
+
+  dimension: pk {
+    primary_key: yes
+    hidden: yes
+    type: string
+    sql: CONCAT(${TABLE}.d, '|', ${TABLE}.gds) ;;
   }
 
   # -------------------------
