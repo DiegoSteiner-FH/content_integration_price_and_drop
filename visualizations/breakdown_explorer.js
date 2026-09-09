@@ -39,6 +39,15 @@
 // before, just the correct denominator: sum(Total Revenue) /
 // sum(Profitable Candidates) across whichever rows share a tab's key.
 //
+// v7 (2026-09-09): removed the Extra Revenue (If Booked 100% of the Time)
+// column -- Profitable was redefined project-wide as "beats best Eligible"
+// (see near_miss_bucket in the LookML), which put extra_revenue_sum and
+// extra_revenue_best_only_sum on the same population; they agreed on
+// nearly every row (only diverging for a candidate that was actually
+// booked at a revenue different from the best Eligible alternative), so
+// the two columns read as near-duplicates. extra_revenue_sum was removed
+// from the LookML entirely; this viz no longer requires or renders it.
+//
 // Required fields, in this exact query (from the price_drop_candidates
 // explore, grouped by all 6 dims below -- do NOT add Created Date as an
 // output column, only as a filter, or every tab will double-count across
@@ -52,7 +61,6 @@
 //   price_drop_candidates.admissible_candidates_count
 //   price_drop_candidates.profitable_candidates_count
 //   price_drop_candidates.revenue_sum
-//   price_drop_candidates.extra_revenue_sum
 //   price_drop_candidates.extra_revenue_best_only_sum
 //
 // Average Revenue is optional in the query (ignored if present -- this viz
@@ -73,11 +81,10 @@
   var COUNT_FIELD = VIEW + ".admissible_candidates_count";
   var PROFITABLE_FIELD = VIEW + ".profitable_candidates_count";
   var REVENUE_SUM_FIELD = VIEW + ".revenue_sum";
-  var EXTRA_SUM_FIELD = VIEW + ".extra_revenue_sum";
   var EXTRA_BEST_FIELD = VIEW + ".extra_revenue_best_only_sum";
 
   var REQUIRED_FIELDS = TABS.map(function (t) { return t.field; })
-    .concat([COUNT_FIELD, PROFITABLE_FIELD, REVENUE_SUM_FIELD, EXTRA_SUM_FIELD, EXTRA_BEST_FIELD]);
+    .concat([COUNT_FIELD, PROFITABLE_FIELD, REVENUE_SUM_FIELD, EXTRA_BEST_FIELD]);
 
   var CSS = "\
     .pd-be { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size: 15px; color: #111827; height: 100%; overflow: auto; }\
@@ -87,13 +94,12 @@
     .pd-be-tab.active { color: #2545d9; border-bottom-color: #2545d9; }\
     .pd-be-table-wrap { padding: 8px 4px; }\
     table.pd-be-table { width: 100%; border-collapse: collapse; table-layout: fixed; }\
-    table.pd-be-table col.pd-be-col-key { width: 14%; }\
-    table.pd-be-table col.pd-be-col-count { width: 12%; }\
-    table.pd-be-table col.pd-be-col-profitableCount { width: 12%; }\
-    table.pd-be-table col.pd-be-col-totalRevenue { width: 14%; }\
-    table.pd-be-table col.pd-be-col-avgRevenue { width: 12%; }\
-    table.pd-be-table col.pd-be-col-extraIfBooked { width: 18%; }\
-    table.pd-be-table col.pd-be-col-extraBestOnly { width: 18%; }\
+    table.pd-be-table col.pd-be-col-key { width: 16%; }\
+    table.pd-be-table col.pd-be-col-count { width: 13%; }\
+    table.pd-be-table col.pd-be-col-profitableCount { width: 13%; }\
+    table.pd-be-table col.pd-be-col-totalRevenue { width: 16%; }\
+    table.pd-be-table col.pd-be-col-avgRevenue { width: 14%; }\
+    table.pd-be-table col.pd-be-col-extraBestOnly { width: 28%; }\
     table.pd-be-table th { text-align: left; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #9ca3af; padding: 10px 12px; cursor: pointer; white-space: normal; line-height: 1.35; vertical-align: bottom; border-bottom: 1px solid #e5e7eb; position: sticky; top: 0; background: #fff; z-index: 2; }\
     table.pd-be-table th:hover { color: #111827; }\
     table.pd-be-table th.num, table.pd-be-table td.num { text-align: right; }\
@@ -149,14 +155,13 @@
     rows.forEach(function (row) {
       var key = strVal(row[fieldName]);
       if (!groups[key]) {
-        groups[key] = { key: key, count: 0, profitableCount: 0, totalRevenue: 0, extraIfBooked: 0, extraBestOnly: 0 };
+        groups[key] = { key: key, count: 0, profitableCount: 0, totalRevenue: 0, extraBestOnly: 0 };
         order.push(key);
       }
       var g = groups[key];
       g.count += numVal(row[COUNT_FIELD]);
       g.profitableCount += numVal(row[PROFITABLE_FIELD]);
       g.totalRevenue += numVal(row[REVENUE_SUM_FIELD]);
-      g.extraIfBooked += numVal(row[EXTRA_SUM_FIELD]);
       g.extraBestOnly += numVal(row[EXTRA_BEST_FIELD]);
     });
     return order.map(function (key) {
@@ -171,12 +176,11 @@
   // summed PROFITABLE count, matching Total Revenue's own Profitable-only
   // scope).
   function computeTotals(grouped) {
-    var t = { count: 0, profitableCount: 0, totalRevenue: 0, extraIfBooked: 0, extraBestOnly: 0 };
+    var t = { count: 0, profitableCount: 0, totalRevenue: 0, extraBestOnly: 0 };
     grouped.forEach(function (g) {
       t.count += g.count;
       t.profitableCount += g.profitableCount;
       t.totalRevenue += g.totalRevenue;
-      t.extraIfBooked += g.extraIfBooked;
       t.extraBestOnly += g.extraBestOnly;
     });
     t.avgRevenue = t.profitableCount ? t.totalRevenue / t.profitableCount : 0;
@@ -189,7 +193,6 @@
     { key: "profitableCount", label: "Profitable Candidates", num: true },
     { key: "totalRevenue", label: "Total Revenue", num: true, fmt: money },
     { key: "avgRevenue", label: "Avg Revenue", num: true, fmt: money },
-    { key: "extraIfBooked", label: "Extra Revenue (If Booked 100% of the Time)", num: true, fmt: moneySigned, signed: true },
     { key: "extraBestOnly", label: "Extra Rev. (Best Only)", num: true, fmt: moneySigned, signed: true }
   ];
 

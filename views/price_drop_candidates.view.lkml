@@ -257,7 +257,7 @@ view: price_drop_candidates {
     group_label: "4. MONETARY"
     label: "Extra Revenue (vs. Booked/Eligible)"
     sql: ${revenue} - COALESCE(${booked_revenue_on_attempt}, ${best_eligible_revenue_on_attempt}, 0) ;;
-    description: "This row's revenue minus whatever was actually booked on the attempt, or the best non-LowRevenue Eligible candidate if nothing was booked, or 0 if neither exists. Mirrors ci_pricedrop_bot's compute_comparison() baseline chain (booked -> best Eligible -> $0). Independent of near_miss_bucket/eligible_delta below -- this one prioritizes what was actually booked; only used by extra_revenue_sum now (extra_revenue_best_only_sum switched to eligible_delta, see below)."
+    description: "This row's revenue minus whatever was actually booked on the attempt, or the best non-LowRevenue Eligible candidate if nothing was booked, or 0 if neither exists. Mirrors ci_pricedrop_bot's compute_comparison() baseline chain (booked -> best Eligible -> $0). Independent of near_miss_bucket/eligible_delta below -- this one prioritizes what was actually booked. No longer backs any measure (extra_revenue_sum was removed 2026-09-09 as a near-duplicate of extra_revenue_best_only_sum once Profitable was redefined) -- stays public for standalone per-row analysis."
   }
 
   # Why (2026-09-09, DS): now falls back to $0 when no Eligible candidate
@@ -317,15 +317,6 @@ view: price_drop_candidates {
     description: "Sum of revenue across de-duplicated Price & Drop Admissible candidates that beat their best Eligible alternative (see near_miss_bucket). Redefined 2026-09-09 along with near_miss_bucket -- previously matched ci_pricedrop_bot's 'Total Simulated Revenue' KPI exactly ($103,072.31 for 2026-09-02); now a deliberate divergence ($68,298.79 for that same day under the new definition)."
   }
 
-  measure: extra_revenue_sum {
-    type: sum
-    sql: CASE WHEN ${near_miss_bucket} = 'Profitable' THEN ${extra_revenue} END ;;
-    value_format: "$#,##0.00"
-    group_label: "6. REVENUE"
-    label: "Extra Revenue (If Booked)"
-    description: "Sum of extra_revenue (booked-first-then-eligible-then-$0 baseline, unchanged) across candidates that beat their best Eligible alternative (near_miss_bucket, redefined 2026-09-09) — the incremental revenue these content sources would have added if live-booking instead of simulation-only, vs. what was actually booked or the best Eligible alternative. No longer matches ci_pricedrop_bot's 'Extra vs. Booked/Eligible' KPI exactly, since the Profitable population it's scoped to has changed."
-  }
-
   # Why (2026-09-09, DS): value changed from extra_revenue (booked-first-
   # then-eligible-then-$0 chain) to eligible_delta (eligible-only, $0
   # fallback) -- requested explicitly to be "specifically vs. best
@@ -333,6 +324,10 @@ view: price_drop_candidates {
   # by. This makes it numerically identical to what was
   # funnel_win_extra_revenue_sum on the Price & Drop funnel, so that
   # duplicate measure was removed -- the funnel now reads this one instead.
+  # Also removed extra_revenue_sum (see below) as a near-duplicate of this
+  # one once both share the same Profitable population -- they agreed on
+  # every row except the rare candidate that was actually booked at a
+  # revenue different from the best Eligible alternative.
   measure: extra_revenue_best_only_sum {
     type: sum
     sql: CASE WHEN ${near_miss_bucket} = 'Profitable' THEN ${eligible_delta} END ;;
