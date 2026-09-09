@@ -140,7 +140,8 @@ view: price_drop_share_rows {
   }
 
   dimension: attempt_id {
-    hidden: yes
+    group_label: "1. ATTEMPT"
+    label: "Attempt ID"
     type: number
     sql: ${TABLE}.attempt_id ;;
     description: "The Optimizer search attempt this row belongs to (ota.optimizer_attempts.id). One attempt can appear on multiple rows here -- once per content source that beat the best Eligible candidate on it."
@@ -150,7 +151,7 @@ view: price_drop_share_rows {
     type: time
     timeframes: [date, week, month, quarter, year, raw]
     sql: ${TABLE}.created_at ;;
-    group_label: "1. DATE"
+    group_label: "1. ATTEMPT"
     label: "Created"
     description: "Attempt's created_at timestamp (stored UTC). Same literal-date-string convention as every other tile in this project -- see price_drop_candidates' own date_date description."
   }
@@ -173,9 +174,10 @@ view: price_drop_share_rows {
 
   dimension: pd_delta {
     type: number
-    hidden: yes
+    group_label: "2. CONTESTANT INFO"
+    label: "Eligible Delta"
     value_format: "$#,##0.00"
     sql: ${TABLE}.pd_delta ;;
-    description: "pd_gds's own revenue minus the best real Eligible candidate's revenue on this attempt. NULL wherever pd_gds is NULL. Only ever used client-side (price_drop_content_source_share.js) to pick the best-of-the-selected-sources winner for the 'If Live' panel -- never summed or averaged as a measure, since this view's grain (one row per profitable content source per attempt) would make any aggregate here meaningless."
+    description: "pd_gds's own revenue minus the best real Eligible candidate's revenue on this attempt. NULL wherever pd_gds is NULL. Only ever used client-side (price_drop_content_source_share.js) to pick the best-of-the-selected-sources winner for the 'If Live' panel -- never summed or averaged as a measure, since this view's grain (one row per profitable content source per attempt) would make any aggregate here meaningless. Not hidden, unlike most helper dimensions in this project -- the custom viz requires it as a raw output column, so it must stay selectable in the field picker."
   }
 }
