@@ -1,44 +1,37 @@
 view: price_drop_candidacy_breakdown {
   # Why (2026-09-08, DS): rule 1 escape hatch -- ports ci_pricedrop_bot's
-  # CANDIDACY_BREAKDOWN_SQL (generate_report.py) directly. Population is EVERY
-  # contestant (any candidacy, no revenue floor, no per-attempt dedup) on a
-  # content source that has at least one Dropped='Price Only' tag on THAT SAME
-  # DAY (see active_pd_gds_by_date below -- this must be scoped per-day, not
-  # over the whole queried range, or a GDS that only becomes active partway
-  # through a multi-day window gets counted as active retroactively for every
-  # earlier day too). A much broader population than price_drop_candidates
-  # (Admissible only). Pre-aggregated to (date, gds, office, carrier,
-  # fare_type, currency, affiliate_id, candidacy) inside the derived table
-  # itself, matching the bot's own ~1.5K-rows/day shipping strategy, instead of
-  # exposing the full ~75K-row/day contestant population to Looker. Verified
-  # 2026-09-08 against 2026-09-02: 74,722 total contestants, Admissible 7.29%,
-  # Incalculable 66.45%, Unbookable 20.53% -- matches ci_pricedrop_bot's
-  # Candidacy Breakdown tile exactly. Re-verified 2026-09-08 across
-  # 2026-09-02..09-07 after the active_pd_gds per-day fix: 74722 / 635895 /
-  # 578748 / 467893 / 458624 / 530900 -- all six days match a live 7-day-
-  # window query exactly, including 09-02 which was wrong (636,208) before
-  # that fix because 'amadeus' only started carrying a Dropped='Price Only'
-  # tag on 09-03 onward and was incorrectly back-applied to 09-02 under the
-  # old whole-window active_pd_gds.
+  # CANDIDACY_BREAKDOWN_SQL (generate_report.py) directly. Pre-aggregated to
+  # (date, gds, office, carrier, fare_type, currency, affiliate_id,
+  # candidacy) inside the derived table itself, matching the bot's own
+  # ~1.5K-rows/day shipping strategy, instead of exposing the full raw
+  # contestant population to Looker.
   #
   # Why (2026-09-08, DS), fare_type/currency/affiliate_id added: affiliate_id
   # does not exist on ota.optimizer_candidates (same gotcha fixed earlier on
   # price_drop_candidates) -- it lives on ota.optimizer_attempts, joined via
-  # attempt_id. Grain measured (correctly scoped to active_pd_gds_by_date,
-  # not the whole optimizer_candidates table) at 2,057 -> 13,819 rows for
-  # 2026-09-02 after adding all three -- small enough to stay fast. SUM(n)
-  # still equals 74,722 for that day, confirming no value regression.
+  # attempt_id.
+  #
+  # Why (2026-09-09, DS), population narrowed to tag-only rows: originally
+  # every candidate belonging to a GDS active for Price & Drop that day (any
+  # gds with >=1 candidate tagged Dropped='Price Only' in the window, via an
+  # active_pd_gds_by_date CTE), regardless of whether the row itself carried
+  # the tag -- this matched ci_pricedrop_bot's own CANDIDACY_BREAKDOWN_SQL,
+  # which was itself ported from and verified digit-for-digit against a
+  # content_integration_optimizer Looker explore tile on 2026-08-14. Live
+  # check 2026-09-09 found zero candidates with candidacy='Eligible' actually
+  # carry the Dropped='Price Only' tag (dropped-for-price and eligible-winner
+  # are mutually exclusive by construction) -- the ~8% Eligible share in the
+  # old population came entirely from same-GDS/same-day siblings, not tagged
+  # rows. The analyst who owns this dashboard determined it should only ever
+  # report on candidates the tag was actually applied to, matching how
+  # price_drop_candidates has always worked (STRAIGHT_JOIN directly on the
+  # candidate's own tag row) -- intentionally diverging from
+  # content_integration_optimizer going forward. ci_pricedrop_bot's own
+  # generate_report.py was changed the same way in the same session. Verified
+  # 2026-09-09 against 2026-09-08: total contestants 687,636 -> 91,189 (both
+  # this view and ci_pricedrop_bot's updated report agree on the new total).
   derived_table: {
     sql:
-      WITH active_pd_gds_by_date AS (
-        SELECT DISTINCT DATE(oct.created_at) AS d, oc.gds
-        FROM ota.optimizer_candidates oc
-        JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
-         AND {% condition price_drop_candidacy_breakdown.date_date %} oct.created_at {% endcondition %}
-        JOIN ota.optimizer_tags ot ON ot.id = oct.tag_id AND ot.name = 'Dropped'
-        WHERE oct.value = 'Price Only'
-          AND {% condition price_drop_candidacy_breakdown.date_date %} oc.created_at {% endcondition %}
-      )
       SELECT
         DATE(oc.created_at) AS d,
         oc.gds,
@@ -50,11 +43,14 @@ view: price_drop_candidacy_breakdown {
         CASE WHEN opc.id IS NOT NULL THEN 'Inadmissible' ELSE oc.candidacy END AS candidacy,
         COUNT(*) AS n
       FROM ota.optimizer_candidates oc
-      JOIN active_pd_gds_by_date ag ON ag.gds = oc.gds AND ag.d = DATE(oc.created_at)
+      JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
+       AND {% condition price_drop_candidacy_breakdown.date_date %} oct.created_at {% endcondition %}
+      JOIN ota.optimizer_tags ot ON ot.id = oct.tag_id AND ot.name = 'Dropped'
       JOIN ota.optimizer_attempts oa ON oa.id = oc.attempt_id
       LEFT JOIN ota.optimizer_candidates opc
         ON opc.id = oc.parent_id AND opc.reprice_type = 'single_to_multi'
-      WHERE {% condition price_drop_candidacy_breakdown.date_date %} oc.created_at {% endcondition %}
+      WHERE oct.value = 'Price Only'
+        AND {% condition price_drop_candidacy_breakdown.date_date %} oc.created_at {% endcondition %}
         AND NOT EXISTS (
           SELECT 1 FROM ota.optimizer_attempt_bookings oab
           JOIN ota.bookings b ON b.id = oab.booking_id
@@ -87,7 +83,7 @@ view: price_drop_candidacy_breakdown {
     group_label: "2. CONTESTANT INFO"
     label: "Content Source"
     sql: ${TABLE}.gds ;;
-    description: "Content source (GDS) that has at least one Dropped='Price Only'-tagged candidate on this same day -- not restricted to the 5 sources ci_pricedrop_bot's other tiles focus on, since this covers every candidacy, not just Admissible ones."
+    description: "Content source (GDS) of the candidate. Every row in this view is a candidate that itself carries a Dropped='Price Only' tag."
   }
 
   dimension: office {
@@ -140,7 +136,7 @@ view: price_drop_candidacy_breakdown {
     label: "Candidacy"
     sql: ${TABLE}.candidacy ;;
     suggestions: ["Admissible", "Unmatchable", "Unprofitable", "Unbookable", "Inadmissible", "Incalculable", "Unprocessable"]
-    description: "Candidate eligibility status. Contestants whose parent has reprice_type='single_to_multi' are force-reclassified to 'Inadmissible' regardless of their own raw candidacy value, matching a temporary override in the reference content_integration_optimizer Looker project."
+    description: "Candidate eligibility status. Contestants whose parent has reprice_type='single_to_multi' are force-reclassified to 'Inadmissible' regardless of their own raw candidacy value, matching a temporary override in the reference content_integration_optimizer Looker project. 'Eligible' never appears here -- a candidate dropped for price reasons is by definition not the winning/eligible one."
   }
 
   # -------------------------
