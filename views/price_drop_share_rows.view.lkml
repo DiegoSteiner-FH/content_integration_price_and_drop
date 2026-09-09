@@ -41,12 +41,29 @@ view: price_drop_share_rows {
   # internal AND is the fallback for any other case, generous margin above
   # the 7-day default window, never an outer WHERE so it can't break NULL
   # preservation the way an always_filter on a joined view would.
+  #
+  # carrier (2026-09-09, DS): one Validating Carrier per ATTEMPT, not per
+  # (attempt, gds) row -- matches the bot's own convention. For the
+  # admissible-tagged branch, sourced from the single best-revenue
+  # candidate across ALL content sources on that attempt (best_overall_
+  # carrier below, same population price_drop_candidates.carrier already
+  # uses -- computed via a second window function on the same
+  # admissible_by_gds scan, rn_overall partitioned by attempt_id only, no
+  # extra table scan needed). For the booked-without-admissible branch,
+  # sourced from the real booked candidate's own carrier (matches
+  # BOOKED_WITHOUT_ADMISSIBLE_SQL's own br.carrier). A row's pd_gds
+  # content source could in principle carry a different carrier than this
+  # attempt-level value if multiple sources on one attempt serve different
+  # carriers -- rare in practice, and this view was never meant to
+  # attribute carrier per-source, only to let you filter/breakdown Content
+  # Source Share by the attempt's own carrier, same as every other tile.
   derived_table: {
     sql:
       WITH admissible_by_gds AS (
         SELECT
-          oc.attempt_id, oc.gds, oc.revenue,
-          ROW_NUMBER() OVER (PARTITION BY oc.attempt_id, oc.gds ORDER BY oc.revenue DESC, oc.id ASC) AS rn
+          oc.attempt_id, oc.gds, oc.revenue, oc.validating_carrier,
+          ROW_NUMBER() OVER (PARTITION BY oc.attempt_id, oc.gds ORDER BY oc.revenue DESC, oc.id ASC) AS rn,
+          ROW_NUMBER() OVER (PARTITION BY oc.attempt_id ORDER BY oc.revenue DESC, oc.id ASC) AS rn_overall
         FROM ota.optimizer_candidates oc
         STRAIGHT_JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
         STRAIGHT_JOIN ota.optimizer_tags ot ON ot.id = oct.tag_id AND ot.name = 'Dropped'
@@ -61,6 +78,9 @@ view: price_drop_share_rows {
       ),
       admissible_attempts AS (
         SELECT DISTINCT attempt_id FROM best_per_gds
+      ),
+      best_overall_carrier AS (
+        SELECT attempt_id, validating_carrier FROM admissible_by_gds WHERE rn_overall = 1
       ),
       best_eligible_ranked AS (
         SELECT
@@ -100,7 +120,7 @@ view: price_drop_share_rows {
       ),
       booked_without_admissible AS (
         SELECT
-          oab.attempt_id, bc.gds AS booked_gds, oa.created_at,
+          oab.attempt_id, bc.gds AS booked_gds, bc.validating_carrier AS carrier, oa.created_at,
           ROW_NUMBER() OVER (PARTITION BY oab.attempt_id ORDER BY bc.revenue DESC, bc.id ASC) AS rn
         FROM ota.optimizer_attempt_bookings oab
         JOIN ota.optimizer_candidates bc ON bc.id = oab.candidate_id
@@ -110,21 +130,23 @@ view: price_drop_share_rows {
           AND oab.attempt_id NOT IN (SELECT attempt_id FROM admissible_attempts)
       ),
       booked_without_admissible_best AS (
-        SELECT attempt_id, booked_gds, created_at FROM booked_without_admissible WHERE rn = 1
+        SELECT attempt_id, booked_gds, carrier, created_at FROM booked_without_admissible WHERE rn = 1
       ),
       base_attempts AS (
-        SELECT aa.attempt_id, oa.created_at, bab.booked_gds
+        SELECT aa.attempt_id, oa.created_at, bab.booked_gds, boc.validating_carrier AS carrier
         FROM admissible_attempts aa
         JOIN ota.optimizer_attempts oa ON oa.id = aa.attempt_id
         LEFT JOIN booked_admissible_best bab ON bab.attempt_id = aa.attempt_id
+        LEFT JOIN best_overall_carrier boc ON boc.attempt_id = aa.attempt_id
         UNION ALL
-        SELECT bwab.attempt_id, bwab.created_at, bwab.booked_gds
+        SELECT bwab.attempt_id, bwab.created_at, bwab.booked_gds, bwab.carrier
         FROM booked_without_admissible_best bwab
       )
       SELECT
         ba.attempt_id,
         ba.created_at,
         ba.booked_gds,
+        ba.carrier,
         pbg.gds AS pd_gds,
         pbg.eligible_delta AS pd_delta
       FROM base_attempts ba
@@ -154,6 +176,14 @@ view: price_drop_share_rows {
     group_label: "1. ATTEMPT"
     label: "Created"
     description: "Attempt's created_at timestamp (stored UTC). Same literal-date-string convention as every other tile in this project -- see price_drop_candidates' own date_date description."
+  }
+
+  dimension: carrier {
+    type: string
+    group_label: "1. ATTEMPT"
+    label: "Validating Carrier"
+    sql: ${TABLE}.carrier ;;
+    description: "One Validating Carrier per attempt (not per content source) -- for the admissible-tagged population, the single best-revenue candidate's carrier across ALL content sources on that attempt (same value price_drop_candidates.carrier uses); for a booking with no admissible candidate at all, the real booked candidate's own carrier. A given attempt's different content-source candidates could in principle carry different validating carriers -- rare in practice -- this field is meant for filtering/breaking down Content Source Share by carrier, not for attributing a carrier to one specific content source."
   }
 
   dimension: booked_gds {
