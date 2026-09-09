@@ -22,6 +22,11 @@
 // fare_type, affiliate_id) combination -- no attempt can span two rows, so
 // no double-counting when summing across rows that share one dimension.
 //
+// v3 (2026-09-08): style pass -- bigger font, proportional column widths
+// (colgroup) instead of content-driven sizing so a long header like
+// "Extra Revenue (If Booked 100% of the Time)" no longer dominates the
+// layout, and a totals (tfoot) row.
+//
 // Required fields, in this exact query (from the price_drop_candidates
 // explore, grouped by all 6 dims below -- do NOT add Created Date as an
 // output column, only as a filter, or every tab will double-count across
@@ -61,21 +66,28 @@
     .concat([COUNT_FIELD, REVENUE_SUM_FIELD, EXTRA_SUM_FIELD, EXTRA_BEST_FIELD]);
 
   var CSS = "\
-    .pd-be { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size: 13px; color: #111827; height: 100%; overflow: auto; }\
+    .pd-be { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size: 15px; color: #111827; height: 100%; overflow: auto; }\
     .pd-be-tabs { display: flex; gap: 4px; border-bottom: 1px solid #e5e7eb; padding: 0 4px; flex-wrap: wrap; }\
-    .pd-be-tab { padding: 8px 14px; cursor: pointer; font-weight: 600; color: #6b7280; border-bottom: 2px solid transparent; user-select: none; }\
+    .pd-be-tab { padding: 10px 16px; cursor: pointer; font-weight: 600; font-size: 14px; color: #6b7280; border-bottom: 2px solid transparent; user-select: none; }\
     .pd-be-tab:hover { color: #111827; }\
     .pd-be-tab.active { color: #2545d9; border-bottom-color: #2545d9; }\
     .pd-be-table-wrap { padding: 8px 4px; }\
-    table.pd-be-table { width: 100%; border-collapse: collapse; }\
-    table.pd-be-table th { text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #9ca3af; padding: 8px 10px; cursor: pointer; white-space: nowrap; border-bottom: 1px solid #e5e7eb; }\
+    table.pd-be-table { width: 100%; border-collapse: collapse; table-layout: fixed; }\
+    table.pd-be-table col.pd-be-col-key { width: 16%; }\
+    table.pd-be-table col.pd-be-col-count { width: 10%; }\
+    table.pd-be-table col.pd-be-col-totalRevenue { width: 15%; }\
+    table.pd-be-table col.pd-be-col-avgRevenue { width: 13%; }\
+    table.pd-be-table col.pd-be-col-extraIfBooked { width: 23%; }\
+    table.pd-be-table col.pd-be-col-extraBestOnly { width: 23%; }\
+    table.pd-be-table th { text-align: left; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #9ca3af; padding: 10px 12px; cursor: pointer; white-space: normal; line-height: 1.35; vertical-align: bottom; border-bottom: 1px solid #e5e7eb; }\
     table.pd-be-table th:hover { color: #111827; }\
     table.pd-be-table th.num, table.pd-be-table td.num { text-align: right; }\
-    table.pd-be-table td { padding: 7px 10px; border-bottom: 1px solid #f1f3f5; font-variant-numeric: tabular-nums; white-space: nowrap; }\
+    table.pd-be-table td { padding: 10px 12px; border-bottom: 1px solid #f1f3f5; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\
     table.pd-be-table tr:hover td { background: #f7f8fa; }\
+    table.pd-be-table tfoot td { font-weight: 700; border-top: 2px solid #e5e7eb; border-bottom: none; background: #f7f8fa; }\
     .pd-be-pos { color: #16a34a; }\
     .pd-be-neg { color: #dc2626; }\
-    .pd-be-sort-arrow { margin-left: 3px; font-size: 9px; }\
+    .pd-be-sort-arrow { margin-left: 3px; font-size: 10px; }\
     .pd-be-empty { padding: 24px; color: #9ca3af; text-align: center; }\
   ";
 
@@ -135,6 +147,20 @@
       g.avgRevenue = g.count ? g.totalRevenue / g.count : 0;
       return g;
     });
+  }
+
+  // Grand total row -- avgRevenue recomputed from the totals, same rule as
+  // aggregateBy (never an average of per-row averages).
+  function computeTotals(grouped) {
+    var t = { count: 0, totalRevenue: 0, extraIfBooked: 0, extraBestOnly: 0 };
+    grouped.forEach(function (g) {
+      t.count += g.count;
+      t.totalRevenue += g.totalRevenue;
+      t.extraIfBooked += g.extraIfBooked;
+      t.extraBestOnly += g.extraBestOnly;
+    });
+    t.avgRevenue = t.count ? t.totalRevenue / t.count : 0;
+    return t;
   }
 
   var COLUMNS = [
@@ -209,21 +235,31 @@
         return '<th class="' + (c.num ? "num" : "") + '" data-col="' + c.key + '">' + label + arrow + "</th>";
       }).join("");
 
+      function rowHtml(g, isTotal) {
+        return "<tr>" + COLUMNS.map(function (c) {
+          var raw = c.key === "key" && isTotal ? "Total" : g[c.key];
+          var display = c.key === "key"
+            ? raw
+            : (c.fmt ? c.fmt(raw) : raw.toLocaleString());
+          var cls = c.num ? "num" : "";
+          if (c.signed && typeof raw === "number") cls += raw > 0 ? " pd-be-pos" : raw < 0 ? " pd-be-neg" : "";
+          return '<td class="' + cls + '">' + display + "</td>";
+        }).join("") + "</tr>";
+      }
+
       var bodyHtml = grouped.length
-        ? grouped.map(function (g) {
-            return "<tr>" + COLUMNS.map(function (c) {
-              var raw = g[c.key];
-              var display = c.fmt ? c.fmt(raw) : raw.toLocaleString();
-              var cls = c.num ? "num" : "";
-              if (c.signed) cls += raw > 0 ? " pd-be-pos" : raw < 0 ? " pd-be-neg" : "";
-              return '<td class="' + cls + '">' + display + "</td>";
-            }).join("") + "</tr>";
-          }).join("")
+        ? grouped.map(function (g) { return rowHtml(g, false); }).join("")
         : '<tr><td colspan="' + COLUMNS.length + '" class="pd-be-empty">No rows for this date range / filter selection</td></tr>';
+
+      var footHtml = grouped.length ? rowHtml(computeTotals(grouped), true) : "";
+
+      var colgroupHtml = COLUMNS.map(function (c) {
+        return '<col class="pd-be-col-' + c.key + '">';
+      }).join("");
 
       root.innerHTML =
         '<div class="pd-be-tabs">' + tabsHtml + "</div>" +
-        '<div class="pd-be-table-wrap"><table class="pd-be-table"><thead><tr>' + headHtml + "</tr></thead><tbody>" + bodyHtml + "</tbody></table></div>";
+        '<div class="pd-be-table-wrap"><table class="pd-be-table"><colgroup>' + colgroupHtml + '</colgroup><thead><tr>' + headHtml + "</tr></thead><tbody>" + bodyHtml + "</tbody><tfoot>" + footHtml + "</tfoot></table></div>";
 
       root.querySelectorAll(".pd-be-tab").forEach(function (el) {
         el.addEventListener("click", function () {
