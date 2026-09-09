@@ -253,7 +253,7 @@ view: price_drop_candidates {
     sql: ${attempt_id} ;;
     group_label: "5. COUNTS"
     label: "Admissible Candidates Count"
-    description: "Count of distinct attempts with a de-duplicated Price & Drop Admissible candidate — one per attempt_id, matching ci_pricedrop_bot's headline count. Every row in this view already is that de-duped candidate (filtered inside the derived table above), so no additional CASE filter is needed."
+    description: "Count of distinct attempts with a de-duplicated Price & Drop Admissible candidate — one per attempt_id, matching ci_pricedrop_bot's headline count. Every row in this view already is that de-duped candidate (filtered inside the derived table above), so no additional CASE filter is needed. Intentionally all-buckets (Profitable + Breakeven + Near-miss) — see profitable_candidates_count for the Profitable-only count."
   }
 
   measure: profitable_candidates_count {
@@ -276,22 +276,31 @@ view: price_drop_candidates {
   # 6. REVENUE
   # -------------------------
 
+  # Why (2026-09-09, DS): scoped to Revenue Bucket = Profitable (Tier 2 --
+  # changes this measure's value for every existing tile using it). Matches
+  # ci_pricedrop_bot's own "Total Simulated Revenue" headline KPI, which is
+  # also profitable-only (sitting in Admissible price-drop candidates, per
+  # the bot's own subtitle) -- previously this summed all three revenue
+  # buckets (Profitable + Breakeven + Near-miss), which is why an earlier
+  # tile comparison against the bot's dashboard came up short ($100,168.33
+  # vs the bot's $103,072.31 for 2026-09-02). Verified match after this
+  # change: $103,072.31 exactly.
   measure: revenue_sum {
     type: sum
-    sql: ${revenue} ;;
+    sql: CASE WHEN ${near_miss_bucket} = 'Profitable' THEN ${revenue} END ;;
     value_format: "$#,##0.00"
     group_label: "6. REVENUE"
     label: "Total Revenue"
-    description: "Sum of revenue across de-duplicated Price & Drop Admissible candidates."
+    description: "Sum of revenue across de-duplicated Price & Drop Admissible candidates, restricted to Revenue Bucket = Profitable. Matches ci_pricedrop_bot's 'Total Simulated Revenue' KPI tile exactly (verified 2026-09-09 against 2026-09-02: $103,072.31)."
   }
 
   measure: extra_revenue_sum {
     type: sum
-    sql: ${extra_revenue} ;;
+    sql: CASE WHEN ${near_miss_bucket} = 'Profitable' THEN ${extra_revenue} END ;;
     value_format: "$#,##0.00"
     group_label: "6. REVENUE"
     label: "Extra Revenue (If Booked)"
-    description: "Sum of extra_revenue across de-duplicated Price & Drop Admissible candidates — the incremental revenue these content sources would have added if live-booking instead of simulation-only, vs. what was actually booked or the best Eligible alternative."
+    description: "Sum of extra_revenue across de-duplicated Price & Drop Admissible candidates, restricted to Revenue Bucket = Profitable — the incremental revenue these content sources would have added if live-booking instead of simulation-only, vs. what was actually booked or the best Eligible alternative. Matches ci_pricedrop_bot's 'Extra vs. Booked/Eligible' KPI tile exactly (verified 2026-09-09 against 2026-09-02: $22,664.02)."
   }
 
   measure: extra_revenue_best_only_sum {
@@ -305,10 +314,10 @@ view: price_drop_candidates {
 
   measure: average_revenue {
     type: average
-    sql: ${revenue} ;;
+    sql: CASE WHEN ${near_miss_bucket} = 'Profitable' THEN ${revenue} END ;;
     value_format: "$#,##0.00"
     group_label: "6. REVENUE"
     label: "Average Revenue"
-    description: "Average revenue per de-duplicated Price & Drop Admissible candidate."
+    description: "Average revenue per de-duplicated Price & Drop Admissible candidate, restricted to Revenue Bucket = Profitable. Matches ci_pricedrop_bot's 'Average per Opportunity' KPI tile exactly (verified 2026-09-09 against 2026-09-02: $32.95)."
   }
 }
