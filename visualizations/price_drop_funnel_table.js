@@ -26,18 +26,27 @@
 // now price_drop_funnel.attempts_with_price_drop_count, not
 // price_drop_any_tag.attempts_with_price_drop_count.
 //
+// Why (2026-09-09, DS), field swap #3: Date/Content Source now read from
+// price_drop_funnel.date_date/.gds (the base view, always populated)
+// instead of price_drop_candidates.date_date/.gds. That second pair is
+// NULL for any (date, gds) with zero Admissible candidates on the LEFT
+// JOIN -- exactly the rows this whole redesign exists to surface correctly
+// (e.g. 'abc': real Price & Drop activity, zero Admissible candidates).
+// Reading Date/Content Source off price_drop_candidates would render
+// blank/garbled labels for precisely the rows that matter most.
+//
 // Required fields, in this exact query (flat, no pivot), from the
 // "CI Price Drop Bot - Funnel" explore:
-//   price_drop_candidates.date_date
-//   price_drop_candidates.gds
+//   price_drop_funnel.date_date
+//   price_drop_funnel.gds
 //   price_drop_funnel.attempts_with_price_drop_count
 //   price_drop_candidates.admissible_candidates_count
 //   price_drop_candidates.profitable_candidates_count
 //   price_drop_candidates.extra_revenue_best_only_sum
 
 (function () {
-  var DATE_FIELD = "price_drop_candidates.date_date";
-  var GDS_FIELD = "price_drop_candidates.gds";
+  var DATE_FIELD = "price_drop_funnel.date_date";
+  var GDS_FIELD = "price_drop_funnel.gds";
   var ANY_TAG_FIELD = "price_drop_funnel.attempts_with_price_drop_count";
   var ADMISSIBLE_FIELD = "price_drop_candidates.admissible_candidates_count";
   var WINS_FIELD = "price_drop_candidates.profitable_candidates_count";
