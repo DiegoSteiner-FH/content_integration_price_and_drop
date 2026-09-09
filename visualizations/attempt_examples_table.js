@@ -33,10 +33,19 @@
 // (extra_revenue) -- see price_drop_candidates.view.lkml's own comments.
 //
 // v2 (2026-09-09): Date now leads the row (was Attempt ID first) -- matches
-// every other tile's column order in this project. Attempt ID is now a
-// clickable link to the internal Optimizer attempt page
-// (https://reservations.voyagesalacarte.ca/optimizer/attempt/<id>), opening
-// in a new tab so the tile itself stays open underneath.
+// every other tile's column order in this project. Attempt ID links to the
+// internal Optimizer attempt page
+// (https://reservations.voyagesalacarte.ca/optimizer/attempt/<id>).
+//
+// v3 (2026-09-09): fixed the Attempt ID link opening TWO tabs per click.
+// A plain <a href target="_blank"> inside a Looker custom viz can fire
+// twice -- the native anchor navigation plus Looker's own outer click
+// handling on the same bubbling click event (a known gotcha with links
+// rendered inside custom visualizations, not specific to this tile).
+// Fixed by rendering a non-navigating <span data-attempt-id> instead and
+// opening the URL from exactly one JS click handler that calls
+// preventDefault()/stopPropagation() -- the click can no longer reach
+// whatever outer listener was triggering the second tab.
 //
 // Required fields (flat, no pivot):
 //   price_drop_candidates.attempt_id
@@ -88,7 +97,7 @@
     .pd-ae-neg { color: #dc2626; }\
     .pd-ae-sort-arrow { margin-left: 3px; font-size: 10px; }\
     .pd-ae-empty { padding: 24px; color: #9ca3af; text-align: center; }\
-    .pd-ae-link { color: #2545d9; text-decoration: none; }\
+    .pd-ae-link { color: #2545d9; cursor: pointer; }\
     .pd-ae-link:hover { text-decoration: underline; }\
   ";
 
@@ -246,7 +255,7 @@
       var colCount = showGdsCol ? 9 : 8;
 
       function rowHtml(r) {
-        var attemptLink = '<a class="pd-ae-link" href="' + ATTEMPT_URL_BASE + encodeURIComponent(r.attemptId) + '" target="_blank" rel="noopener noreferrer">' + esc(r.attemptId) + "</a>";
+        var attemptLink = '<span class="pd-ae-link" data-attempt-id="' + esc(r.attemptId) + '">' + esc(r.attemptId) + "</span>";
         return "<tr>" +
           "<td>" + esc(r.date) + "</td>" +
           '<td class="mono">' + attemptLink + "</td>" +
@@ -290,6 +299,14 @@
             self._sort.dir = "desc";
           }
           self.render();
+        });
+      });
+      root.querySelectorAll(".pd-ae-link").forEach(function (el) {
+        el.addEventListener("click", function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          var id = el.getAttribute("data-attempt-id");
+          window.open(ATTEMPT_URL_BASE + encodeURIComponent(id), "_blank", "noopener,noreferrer");
         });
       });
     }
