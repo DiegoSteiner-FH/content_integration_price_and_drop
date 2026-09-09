@@ -56,8 +56,9 @@ explore: price_drop_price_rate {
 }
 
 explore: price_drop_share {
+  from: price_drop_share_rows
   label: "CI Price Drop Bot - Content Source Share"
-  description: "Today (actual bookings) vs. If Live: every real booking in the window (tagged or not) keeps its actual content source unless a chosen set of Price & Drop sources had a candidate beating the best real Eligible alternative on that attempt, in which case the best such source wins the row instead. Full parity with ci_pricedrop_bot's own Content Source Share section on population (every real booking counts, not just tag-anchored ones, unlike every other explore here); one deliberate divergence on what counts as a 'win' -- beats best Eligible (this project's own Profitable definition), not raw revenue > 0. See price_drop_share_rows.view.lkml for the full reasoning."
+  description: "Today (actual bookings) vs. If Live: every real booking in the window (tagged or not) keeps its actual content source unless a chosen set of Price & Drop sources had a candidate beating the best real Eligible alternative on that attempt, in which case the best such source wins the row instead. Full parity with ci_pricedrop_bot's own Content Source Share section on population (every real booking counts, not just tag-anchored ones, unlike every other explore here); one deliberate divergence on what counts as a 'win' -- beats best Eligible (this project's own Profitable definition), not raw revenue > 0. See price_drop_share_rows.view.lkml for the full reasoning. Note: `from:` aliases price_drop_share_rows's fields to this explore's own name (price_drop_share.*) everywhere within this explore -- matches the {% condition price_drop_share.date_date %} tags already inside that view's derived table and the custom visualization's own required field names."
   persist_with: price_drop_candidates_default_datagroup
 
   always_filter: {
