@@ -21,3 +21,9 @@ visualization: {
   label: "Price Drop Funnel Table"
   file: "visualizations/price_drop_funnel_table.js"
 }
+
+visualization: {
+  id: "price_drop_content_source_share"
+  label: "Price Drop Content Source Share"
+  file: "visualizations/content_source_share.js"
+}
