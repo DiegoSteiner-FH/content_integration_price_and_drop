@@ -23,7 +23,7 @@ explore: price_drop_funnel {
   persist_with: price_drop_candidates_default_datagroup
 
   always_filter: {
-    filters: [price_drop_funnel.date_date: "7 days"]
+    filters: [price_drop_funnel.date_date: "7 days", price_drop_candidates.date_date: "7 days"]
   }
 
   join: price_drop_candidates {
