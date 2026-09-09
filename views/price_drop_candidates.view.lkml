@@ -258,14 +258,16 @@ view: price_drop_candidates {
     hidden: yes
     type: number
     sql: ${TABLE}.booked_revenue ;;
-    description: "Revenue of the highest-revenue candidate in ota.optimizer_attempt_bookings for this attempt (any row, not just a finalized booking_id) — hidden helper for extra_revenue. Computed once in the derived table's own booked_ranked CTE, matching ci_pricedrop_bot's booked_ranked CTE exactly."
+    description: "Revenue of the highest-revenue candidate in ota.optimizer_attempt_bookings for this attempt (any row, not just a finalized booking_id) — hidden helper for extra_revenue. Computed once in the derived table's own booked_ranked CTE, matching ci_pricedrop_bot's booked_ranked CTE exactly. Deliberately kept hidden 2026-09-09 when best_eligible_revenue_on_attempt/eligible_delta below were unhidden for the Attempt Examples tile -- that tile's baseline/delta columns are the already-established eligible-only comparison, not this booked-first one, so exposing this alongside them would show a mismatched pair."
   }
 
   dimension: best_eligible_revenue_on_attempt {
-    hidden: yes
     type: number
+    value_format: "$#,##0.00"
+    group_label: "4. MONETARY"
+    label: "Best Eligible Revenue"
     sql: ${TABLE}.best_eligible_revenue ;;
-    description: "Revenue of the best Eligible-candidacy candidate on this attempt, excluding LowRevenue-tagged candidates (a LowRevenue candidate can still be Eligible but would never actually get booked in practice, same exclusion ci_pricedrop_bot applies) — hidden fallback helper for extra_revenue when nothing was booked. Computed once in the derived table's own best_eligible_ranked CTE."
+    description: "Revenue of the best Eligible-candidacy candidate on this attempt, excluding LowRevenue-tagged candidates (a LowRevenue candidate can still be Eligible but would never actually get booked in practice, same exclusion ci_pricedrop_bot applies). Computed once in the derived table's own best_eligible_ranked CTE. Unhidden 2026-09-09 for the Attempt Examples tile (date, carrier, office, fare type, PD rev vs. this baseline, delta) -- this is that tile's 'vs. Best Eligible' column, paired with eligible_delta below."
   }
 
   dimension: extra_revenue {
@@ -287,10 +289,12 @@ view: price_drop_candidates {
   # $0 fallback above (though that one only reaches $0 after also checking
   # for a real booking, which this comparison deliberately ignores).
   dimension: eligible_delta {
-    hidden: yes
     type: number
+    value_format: "$#,##0.00"
+    group_label: "4. MONETARY"
+    label: "Delta (vs. Best Eligible)"
     sql: ${revenue} - COALESCE(${best_eligible_revenue_on_attempt}, 0) ;;
-    description: "This candidate's revenue minus the best non-LowRevenue Eligible candidate's revenue on the same attempt, falling back to $0 when no Eligible candidate exists on the attempt at all. NEVER considers what was actually booked, unlike extra_revenue above -- a genuinely different comparison. Drives near_miss_bucket (and therefore profitable_candidates_count / revenue_sum / average_revenue / near_miss_count) and extra_revenue_best_only_sum below."
+    description: "This candidate's revenue minus the best non-LowRevenue Eligible candidate's revenue on the same attempt, falling back to $0 when no Eligible candidate exists on the attempt at all. NEVER considers what was actually booked, unlike extra_revenue above -- a genuinely different comparison. Drives near_miss_bucket (and therefore profitable_candidates_count / revenue_sum / average_revenue / near_miss_count) and extra_revenue_best_only_sum below. Unhidden 2026-09-09 for the Attempt Examples tile -- its per-row 'Delta' column, the same figure extra_revenue_best_only_sum sums across Profitable candidates."
   }
 
   # -------------------------
