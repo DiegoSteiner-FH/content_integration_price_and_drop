@@ -2,28 +2,36 @@
 //
 // Why (2026-09-09, DS): reproduces ci_pricedrop_bot's "Price & Drop funnel"
 // tile -- one row per (date, content source), showing top-of-funnel volume
-// down through Admissible candidates down through wins vs. the best Eligible
-// candidate. Unlike the sibling Price Rate / Candidacy Breakdown custom
-// visualizations, this query is NOT reshaped client-side -- price_drop_any_tag
-// and price_drop_candidates are joined in the explore at the (date, gds)
-// grain already, so each result row already IS one funnel row. This viz only
-// computes the two percentage columns and renders/sorts/totals.
+// down through Admissible candidates down through Profitable ones (beats the
+// best Eligible candidate). Unlike the sibling Price Rate / Candidacy
+// Breakdown custom visualizations, this query is NOT reshaped client-side --
+// price_drop_any_tag and price_drop_candidates are joined in the explore at
+// the (date, gds) grain already, so each result row already IS one funnel
+// row. This viz only computes the two percentage columns and renders/sorts/
+// totals.
+//
+// Why (2026-09-09, DS), field swap: funnel_wins_count /
+// funnel_win_extra_revenue_sum were removed from price_drop_candidates --
+// "Profitable" was redefined globally to mean "beats best Eligible" (was
+// revenue > 0), making those two fields exact duplicates of
+// profitable_candidates_count / extra_revenue_best_only_sum. This viz now
+// reads the latter two directly; no other logic changed.
 //
 // Required fields, in this exact query (flat, no pivot):
 //   price_drop_candidates.date_date
 //   price_drop_candidates.gds
 //   price_drop_any_tag.attempts_with_price_drop_count
 //   price_drop_candidates.admissible_candidates_count
-//   price_drop_candidates.funnel_wins_count
-//   price_drop_candidates.funnel_win_extra_revenue_sum
+//   price_drop_candidates.profitable_candidates_count
+//   price_drop_candidates.extra_revenue_best_only_sum
 
 (function () {
   var DATE_FIELD = "price_drop_candidates.date_date";
   var GDS_FIELD = "price_drop_candidates.gds";
   var ANY_TAG_FIELD = "price_drop_any_tag.attempts_with_price_drop_count";
   var ADMISSIBLE_FIELD = "price_drop_candidates.admissible_candidates_count";
-  var WINS_FIELD = "price_drop_candidates.funnel_wins_count";
-  var EXTRA_REVENUE_FIELD = "price_drop_candidates.funnel_win_extra_revenue_sum";
+  var WINS_FIELD = "price_drop_candidates.profitable_candidates_count";
+  var EXTRA_REVENUE_FIELD = "price_drop_candidates.extra_revenue_best_only_sum";
 
   var REQUIRED_FIELDS = [DATE_FIELD, GDS_FIELD, ANY_TAG_FIELD, ADMISSIBLE_FIELD, WINS_FIELD, EXTRA_REVENUE_FIELD];
 
@@ -191,7 +199,7 @@
         '<th data-col="gds">Content Source' + sortArrow("gds") + "</th>" +
         '<th class="num" data-col="anyTag">Attempts w/ Price &amp; Drop' + sortArrow("anyTag") + "</th>" +
         '<th class="num" data-col="admissible">Attempts w/ Admissible' + sortArrow("admissible") + "</th>" +
-        '<th class="num" data-col="wins">Wins (vs. Best Eligible)' + sortArrow("wins") + "</th>" +
+        '<th class="num" data-col="wins">Profitable (vs. Best Eligible)' + sortArrow("wins") + "</th>" +
         '<th class="num" data-col="extraRevenue">Extra Revenue' + sortArrow("extraRevenue") + "</th>";
 
       function rowHtml(r, isTotal) {
