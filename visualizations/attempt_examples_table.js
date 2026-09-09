@@ -32,6 +32,12 @@
 // baseline. Deliberately NOT the bot's own booked-first comparison chain
 // (extra_revenue) -- see price_drop_candidates.view.lkml's own comments.
 //
+// v2 (2026-09-09): Date now leads the row (was Attempt ID first) -- matches
+// every other tile's column order in this project. Attempt ID is now a
+// clickable link to the internal Optimizer attempt page
+// (https://reservations.voyagesalacarte.ca/optimizer/attempt/<id>), opening
+// in a new tab so the tile itself stays open underneath.
+//
 // Required fields (flat, no pivot):
 //   price_drop_candidates.attempt_id
 //   price_drop_candidates.date_date
@@ -61,6 +67,8 @@
 
   var ALL_TAB = "__all__";
 
+  var ATTEMPT_URL_BASE = "https://reservations.voyagesalacarte.ca/optimizer/attempt/";
+
   var CSS = "\
     .pd-ae { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size: 15px; color: #111827; height: 100%; overflow: auto; }\
     .pd-ae-tabs { display: flex; gap: 4px; border-bottom: 1px solid #e5e7eb; padding: 0 4px; flex-wrap: wrap; }\
@@ -80,6 +88,8 @@
     .pd-ae-neg { color: #dc2626; }\
     .pd-ae-sort-arrow { margin-left: 3px; font-size: 10px; }\
     .pd-ae-empty { padding: 24px; color: #9ca3af; text-align: center; }\
+    .pd-ae-link { color: #2545d9; text-decoration: none; }\
+    .pd-ae-link:hover { text-decoration: underline; }\
   ";
 
   function injectStyleOnce() {
@@ -114,6 +124,12 @@
   function fmtMoneySigned(n) {
     var sign = n > 0 ? "+" : n < 0 ? "-" : "";
     return sign + "$" + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
   }
 
   function buildRows(rawRows) {
@@ -217,8 +233,8 @@
         })).join("");
 
       var headHtml =
-        '<th data-col="attemptId">Attempt ID' + sortArrow("attemptId") + "</th>" +
         '<th data-col="date">Date' + sortArrow("date") + "</th>" +
+        '<th data-col="attemptId">Attempt ID' + sortArrow("attemptId") + "</th>" +
         (showGdsCol ? '<th data-col="gds">Content Source' + sortArrow("gds") + "</th>" : "") +
         '<th data-col="carrier">Carrier' + sortArrow("carrier") + "</th>" +
         '<th data-col="office">Office' + sortArrow("office") + "</th>" +
@@ -230,9 +246,10 @@
       var colCount = showGdsCol ? 9 : 8;
 
       function rowHtml(r) {
+        var attemptLink = '<a class="pd-ae-link" href="' + ATTEMPT_URL_BASE + encodeURIComponent(r.attemptId) + '" target="_blank" rel="noopener noreferrer">' + esc(r.attemptId) + "</a>";
         return "<tr>" +
-          '<td class="mono">' + esc(r.attemptId) + "</td>" +
           "<td>" + esc(r.date) + "</td>" +
+          '<td class="mono">' + attemptLink + "</td>" +
           (showGdsCol ? "<td>" + esc(r.gds) + "</td>" : "") +
           "<td>" + esc(r.carrier) + "</td>" +
           "<td>" + esc(r.office) + "</td>" +
@@ -241,12 +258,6 @@
           '<td class="num">' + fmtMoney(r.bestEligible) + "</td>" +
           '<td class="num ' + (r.delta > 0 ? "pd-ae-pos" : r.delta < 0 ? "pd-ae-neg" : "") + '">' + fmtMoneySigned(r.delta) + "</td>" +
           "</tr>";
-      }
-
-      function esc(s) {
-        return String(s).replace(/[&<>"']/g, function (c) {
-          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-        });
       }
 
       var bodyHtml = rows.length
