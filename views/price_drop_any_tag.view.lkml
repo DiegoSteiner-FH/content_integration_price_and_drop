@@ -5,40 +5,52 @@ view: price_drop_any_tag {
   # Dropped='Price Only' tag on ANY candidate, regardless of that
   # candidate's own candidacy or revenue -- a strict superset of
   # price_drop_candidates' own population (Admissible + revenue > -50
-  # only). One row per attempt_id (arbitrary highest-revenue candidate pick
-  # among same-attempt tagged candidates -- irrelevant here since these
-  # rows only carry dimensions for cross-filtering/counting attempts, not
-  # revenue), matching the bot's own ANY_PD_TAG_SQL exactly. Verified
-  # 2026-09-09 against 2026-09-08: 2,670 distinct attempts for
-  # gds='aerohub', matching a direct run of the bot's own
+  # only). Verified 2026-09-09 against 2026-09-08: 2,670 distinct attempts
+  # for gds='aerohub', matching a direct run of the bot's own
   # fetch_any_pricedrop_tag_rows() exactly.
+  #
+  # Why (2026-09-09, DS), pre-aggregated to (date, gds): originally one row
+  # per attempt_id (with attempt_id as primary key, office/carrier/
+  # fare_type/currency/affiliate_id dims carried too), joined into the
+  # price_drop_candidates explore at the (date, gds) grain. Looker does NOT
+  # pre-aggregate either side of a join before executing it -- confirmed via
+  # the actual generated SQL for a 7-day funnel tile query, which was a raw
+  # `FROM price_drop_candidates LEFT JOIN price_drop_any_tag ON date=date
+  # AND gds=gds` between two multi-thousand-row-per-day tables (~1,900 x
+  # ~2,670 rows = ~5M joined rows for one gds on one day alone, before
+  # GROUP BY). Looker's symmetric aggregates kept the final counts/sums
+  # correct despite this, but MySQL still had to physically build that huge
+  # join first -- the tile was genuinely slow, not just cold-cache. Fixed by
+  # pre-aggregating this derived table down to (date, gds) directly, same
+  # pattern as price_drop_candidacy_breakdown / price_drop_price_rate --
+  # this side of the join is now a few dozen rows, not thousands. Dropped
+  # office/carrier/fare_type/currency/affiliate_id and the attempt_id
+  # primary key -- none were used outside this join key, and keeping any in
+  # the GROUP BY would reintroduce the same fan-out at smaller scale.
+  # attempts_with_price_drop_count changed from count_distinct(attempt_id)
+  # to sum(pre-aggregated count) -- same numeric result, since attempt_id
+  # was already deduped to one row per attempt via rn=1 (COUNT(*) per
+  # (d, gds) bucket = the prior COUNT(DISTINCT attempt_id)). Re-verified
+  # 2026-09-09 against 2026-09-08, gds='aerohub': still 2,670.
   derived_table: {
     sql:
       WITH tagged AS (
         SELECT
-          oc.id AS candidate_id, oc.attempt_id, oc.gds, oc.gds_account_id AS office_id,
-          oc.validating_carrier AS carrier, oc.fare_type, oc.currency, oa.affiliate_id,
+          oc.id AS candidate_id, oc.attempt_id, oc.gds,
           DATE(oc.created_at) AS d,
           ROW_NUMBER() OVER (PARTITION BY oc.attempt_id ORDER BY oc.revenue DESC, oc.id ASC) AS rn
         FROM ota.optimizer_candidates oc
         JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
          AND {% condition price_drop_any_tag.date_date %} oct.created_at {% endcondition %}
         JOIN ota.optimizer_tags ot ON ot.id = oct.tag_id AND ot.name = 'Dropped'
-        JOIN ota.optimizer_attempts oa ON oa.id = oc.attempt_id
         WHERE oct.value = 'Price Only'
           AND {% condition price_drop_any_tag.date_date %} oc.created_at {% endcondition %}
       )
-      SELECT candidate_id, attempt_id, gds, office_id, carrier, fare_type, currency, affiliate_id, d
+      SELECT d, gds, COUNT(*) AS n
       FROM tagged
       WHERE rn = 1
+      GROUP BY d, gds
     ;;
-  }
-
-  dimension: attempt_id {
-    primary_key: yes
-    hidden: yes
-    type: number
-    sql: ${TABLE}.attempt_id ;;
   }
 
   # -------------------------
@@ -63,47 +75,7 @@ view: price_drop_any_tag {
     group_label: "2. CONTESTANT INFO"
     label: "Content Source"
     sql: ${TABLE}.gds ;;
-    description: "Content source of the (arbitrary, highest-revenue) candidate picked to represent this attempt's Price & Drop tag -- any candidacy, no revenue floor. Used only for the Price & Drop funnel's top-of-funnel count; a different attempt-representative candidate than price_drop_candidates' own Admissible-only pick, so don't join these two views' rows 1:1 by attempt_id -- combine their measures at the (date, gds) grain instead, matching ci_pricedrop_bot's own computePriceDropFunnel()."
-  }
-
-  dimension: office {
-    type: string
-    group_label: "2. CONTESTANT INFO"
-    label: "Office Id"
-    sql: ${TABLE}.office_id ;;
-    description: "GDS account / office ID of the representative candidate."
-  }
-
-  dimension: carrier {
-    type: string
-    group_label: "2. CONTESTANT INFO"
-    label: "Validating Carrier"
-    sql: ${TABLE}.carrier ;;
-    description: "Validating carrier of the representative candidate."
-  }
-
-  dimension: fare_type {
-    type: string
-    group_label: "2. CONTESTANT INFO"
-    label: "Fare Type"
-    sql: ${TABLE}.fare_type ;;
-    description: "Fare type of the representative candidate."
-  }
-
-  dimension: currency {
-    type: string
-    group_label: "2. CONTESTANT INFO"
-    label: "Currency"
-    sql: ${TABLE}.currency ;;
-    description: "Representative candidate's own currency (ota.optimizer_candidates.currency)."
-  }
-
-  dimension: affiliate_id {
-    type: number
-    group_label: "2. CONTESTANT INFO"
-    label: "Affiliate ID"
-    sql: ${TABLE}.affiliate_id ;;
-    description: "Affiliate the search attempt belongs to (ota.optimizer_attempts.affiliate_id, joined via attempt_id)."
+    description: "Content source of the (arbitrary, highest-revenue) candidate picked to represent each attempt's Price & Drop tag -- any candidacy, no revenue floor. Used only for the Price & Drop funnel's top-of-funnel count; a different attempt-representative candidate than price_drop_candidates' own Admissible-only pick, so don't expect a 1:1 relationship with that view's rows -- combine their measures at the (date, gds) grain instead, matching ci_pricedrop_bot's own computePriceDropFunnel()."
   }
 
   # -------------------------
@@ -111,8 +83,8 @@ view: price_drop_any_tag {
   # -------------------------
 
   measure: attempts_with_price_drop_count {
-    type: count_distinct
-    sql: ${attempt_id} ;;
+    type: sum
+    sql: ${TABLE}.n ;;
     group_label: "3. COUNTS"
     label: "Attempts w/ Price & Drop"
     description: "Count of distinct attempts with a Dropped='Price Only' tag on any candidate, regardless of candidacy or revenue -- the Price & Drop funnel's top-of-funnel denominator. Matches ci_pricedrop_bot's any_pricedrop_tag_count exactly (verified 2026-09-09 against 2026-09-08, gds='aerohub': 2,670)."
