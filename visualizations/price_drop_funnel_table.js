@@ -35,6 +35,19 @@
 // Reading Date/Content Source off price_drop_candidates would render
 // blank/garbled labels for precisely the rows that matter most.
 //
+// v2 (2026-09-09): added per-content-source tabs, dynamically built from
+// whichever GDS values are actually present in this query's own rows each
+// render -- no hardcoded list anywhere (contrast with breakdown_explorer.js's
+// TABS, which is a fixed list of DIMENSIONS, not values). A new content
+// source added to the Price & Drop simulation gets its own tab the moment
+// it appears in a query result, no LookML/JS change needed. An "All" tab
+// (first, default) keeps the original combined view, sorted date desc then
+// anyTag desc; a GDS-specific tab drops the now-redundant Content Source
+// column and shows just Date + the four funnel metrics for that one source,
+// same underlying rows, no re-query. Tabs are ordered by each GDS's own
+// total Attempts w/ Price & Drop across the current result set, descending
+// -- most active content source first.
+//
 // Required fields, in this exact query (flat, no pivot), from the
 // "CI Price Drop Bot - Funnel" explore:
 //   price_drop_funnel.date_date
@@ -54,8 +67,14 @@
 
   var REQUIRED_FIELDS = [DATE_FIELD, GDS_FIELD, ANY_TAG_FIELD, ADMISSIBLE_FIELD, WINS_FIELD, EXTRA_REVENUE_FIELD];
 
+  var ALL_TAB = "__all__";
+
   var CSS = "\
     .pd-fn { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size: 15px; color: #111827; height: 100%; overflow: auto; }\
+    .pd-fn-tabs { display: flex; gap: 4px; border-bottom: 1px solid #e5e7eb; padding: 0 4px; flex-wrap: wrap; }\
+    .pd-fn-tab { padding: 10px 16px; cursor: pointer; font-weight: 600; font-size: 14px; color: #6b7280; border-bottom: 2px solid transparent; user-select: none; }\
+    .pd-fn-tab:hover { color: #111827; }\
+    .pd-fn-tab.active { color: #2545d9; border-bottom-color: #2545d9; }\
     .pd-fn-wrap { padding: 8px 4px; }\
     table.pd-fn-table { width: 100%; border-collapse: collapse; table-layout: fixed; }\
     table.pd-fn-table col.pd-fn-col-date { width: 12%; }\
@@ -150,6 +169,25 @@
     };
   }
 
+  // Distinct GDS values present in this result set, ordered by each one's
+  // own total Attempts w/ Price & Drop across the current rows, descending
+  // -- most active content source first. Purely derived from the data on
+  // every render, so a brand-new GDS value becomes its own tab the moment
+  // it appears in a query result, with zero code changes required.
+  function distinctGds(rows) {
+    var totals = {};
+    var order = [];
+    rows.forEach(function (r) {
+      if (!(r.gds in totals)) {
+        totals[r.gds] = 0;
+        order.push(r.gds);
+      }
+      totals[r.gds] += r.anyTag;
+    });
+    order.sort(function (a, b) { return totals[b] - totals[a]; });
+    return order;
+  }
+
   looker.plugins.visualizations.add({
     id: "price_drop_funnel_table",
     label: "Price Drop Funnel Table",
@@ -162,6 +200,7 @@
       // Matches ci_pricedrop_bot's own computePriceDropFunnel() default sort:
       // most recent date first, then most top-of-funnel volume within a date.
       this._sort = { col: "date_anyTag", dir: "desc" };
+      this._activeTab = ALL_TAB;
     },
 
     updateAsync: function (data, element, config, queryResponse, details, done) {
@@ -190,7 +229,18 @@
     render: function () {
       var self = this;
       var root = this._element.querySelector(".pd-fn");
-      var rows = buildRows(this._rows);
+      var allRows = buildRows(this._rows);
+      var gdsList = distinctGds(allRows);
+
+      // The active GDS tab can vanish between renders (a filter/date range
+      // change that drops it from the result) -- fall back to All rather
+      // than showing a permanently-empty tab.
+      if (self._activeTab !== ALL_TAB && gdsList.indexOf(self._activeTab) === -1) {
+        self._activeTab = ALL_TAB;
+      }
+
+      var showGdsCol = self._activeTab === ALL_TAB;
+      var rows = showGdsCol ? allRows : allRows.filter(function (r) { return r.gds === self._activeTab; });
 
       var sortCol = this._sort.col;
       var dir = this._sort.dir === "asc" ? 1 : -1;
@@ -213,13 +263,21 @@
         return sortCol === col ? '<span class="pd-fn-sort-arrow">' + (self._sort.dir === "desc" ? "▼" : "▲") + "</span>" : "";
       }
 
+      var tabsHtml = ['<div class="pd-fn-tab' + (self._activeTab === ALL_TAB ? " active" : "") + '" data-tab="' + ALL_TAB + '">All</div>']
+        .concat(gdsList.map(function (g) {
+          var cls = "pd-fn-tab" + (g === self._activeTab ? " active" : "");
+          return '<div class="' + cls + '" data-tab="' + g + '">' + g + "</div>";
+        })).join("");
+
       var headHtml =
         '<th data-col="date">Date' + sortArrow("date") + "</th>" +
-        '<th data-col="gds">Content Source' + sortArrow("gds") + "</th>" +
+        (showGdsCol ? '<th data-col="gds">Content Source' + sortArrow("gds") + "</th>" : "") +
         '<th class="num" data-col="anyTag">Attempts w/ Price &amp; Drop' + sortArrow("anyTag") + "</th>" +
         '<th class="num" data-col="admissible">Attempts w/ Admissible' + sortArrow("admissible") + "</th>" +
         '<th class="num" data-col="wins">Profitable (vs. Best Eligible)' + sortArrow("wins") + "</th>" +
         '<th class="num" data-col="extraRevenue">Extra Revenue' + sortArrow("extraRevenue") + "</th>";
+
+      var colCount = showGdsCol ? 6 : 5;
 
       function rowHtml(r, isTotal) {
         var barPct = isTotal ? 100 : (r.anyTag / maxAnyTag) * 100;
@@ -229,22 +287,38 @@
         var admissibleCell = '<td class="num">' + fmtInt(r.admissible) + '<span class="pd-fn-pct">(' + fmtPct(r.admissiblePct) + ")</span></td>";
         var winsCell = '<td class="num">' + fmtInt(r.wins) + '<span class="pd-fn-pct">(' + fmtPct(r.winPct) + ")</span></td>";
         var extraCell = '<td class="num' + (r.extraRevenue >= 0 ? " pd-fn-pos" : "") + '">' + fmtMoney(r.extraRevenue) + "</td>";
-        var keyCell = isTotal
-          ? '<td class="cell-key">' + r.date + "</td><td></td>"
-          : "<td>" + r.date + '</td><td class="cell-key">' + r.gds + "</td>";
+        var keyCell;
+        if (showGdsCol) {
+          keyCell = isTotal
+            ? '<td class="cell-key">' + r.date + "</td><td></td>"
+            : "<td>" + r.date + '</td><td class="cell-key">' + r.gds + "</td>";
+        } else {
+          keyCell = '<td class="cell-key">' + r.date + "</td>";
+        }
         return "<tr>" + keyCell + anyTagCell + admissibleCell + winsCell + extraCell + "</tr>";
       }
 
       var bodyHtml = rows.length
         ? rows.map(function (r) { return rowHtml(r, false); }).join("")
-        : '<tr><td colspan="6" class="pd-fn-empty">No rows for this date range / filter selection</td></tr>';
+        : '<tr><td colspan="' + colCount + '" class="pd-fn-empty">No rows for this date range / filter selection</td></tr>';
 
       var footHtml = rows.length ? rowHtml(computeTotals(rows), true) : "";
 
+      var colgroupHtml = showGdsCol
+        ? '<col class="pd-fn-col-date"><col class="pd-fn-col-gds">'
+        : '<col class="pd-fn-col-date">';
+
       root.innerHTML =
-        '<div class="pd-fn-wrap"><table class="pd-fn-table"><colgroup><col class="pd-fn-col-date"><col class="pd-fn-col-gds"></colgroup><thead><tr>' +
+        '<div class="pd-fn-tabs">' + tabsHtml + "</div>" +
+        '<div class="pd-fn-wrap"><table class="pd-fn-table"><colgroup>' + colgroupHtml + '</colgroup><thead><tr>' +
         headHtml + "</tr></thead><tbody>" + bodyHtml + "</tbody><tfoot>" + footHtml + "</tfoot></table></div>";
 
+      root.querySelectorAll(".pd-fn-tab").forEach(function (el) {
+        el.addEventListener("click", function () {
+          self._activeTab = el.getAttribute("data-tab");
+          self.render();
+        });
+      });
       root.querySelectorAll("th").forEach(function (el) {
         el.addEventListener("click", function () {
           var col = el.getAttribute("data-col");
