@@ -260,7 +260,7 @@ view: price_drop_candidates {
     sql: ${attempt_id} ;;
     group_label: "5. COUNTS"
     label: "Admissible Candidates Count"
-    description: "Count of distinct attempts with a de-duplicated Price & Drop Admissible candidate — one per attempt_id, matching ci_pricedrop_bot's headline count. Every row in this view already is that de-duped candidate (filtered inside the derived table above), so no additional CASE filter is needed. Intentionally all-buckets (Profitable + Breakeven + Near-miss) — see profitable_candidates_count for the Profitable-only count."
+    description: "Count of distinct attempts with a de-duplicated Price & Drop Admissible candidate — one per attempt_id, matching ci_pricedrop_bot's headline count. Every row in this view already is that de-duped candidate (filtered inside the derived table above), so no additional CASE filter is needed. Intentionally all-buckets (Profitable + Breakeven + Near-miss) — see profitable_candidates_count for the Profitable-only count. Also the Price & Drop funnel's 'Attempts w/ Admissible' column -- confirmed 2026-09-09 by tracing build_dashboard_entry.py: the dashboard's 'rows' JSON field (what computePriceDropFunnel() actually receives) is assigned from explorer_rows, built from all_rows (every revenue bucket) -- not the same-named Python-local `rows` variable (profitable-only) used elsewhere for KPI-row summaries. Those two same-named things are different populations; this measure matches the one the funnel actually uses."
   }
 
   measure: profitable_candidates_count {
@@ -268,7 +268,7 @@ view: price_drop_candidates {
     sql: CASE WHEN ${near_miss_bucket} = 'Profitable' THEN ${attempt_id} END ;;
     group_label: "5. COUNTS"
     label: "Profitable Candidates"
-    description: "Count of de-duplicated Price & Drop Admissible candidates with revenue > 0 — matches ci_pricedrop_bot's 'Profitable Opportunities' KPI tile population exactly. Complements admissible_candidates_count (all three revenue buckets) and near_miss_count (near-miss bucket only). Formalizes a custom field the user built ad hoc (Admissible Candidates Count filtered to Revenue Bucket = Profitable) as a real measure. Also doubles as the Price & Drop funnel's 'Attempts w/ Admissible' column -- the bot's own funnel counts only Profitable attempts (build_dashboard_entry.py: `rows = [r for r in all_rows if pricedrop_revenue > 0]`), not all three buckets."
+    description: "Count of de-duplicated Price & Drop Admissible candidates with revenue > 0 — matches ci_pricedrop_bot's 'Profitable Opportunities' KPI tile population exactly. Complements admissible_candidates_count (all three revenue buckets) and near_miss_count (near-miss bucket only). Formalizes a custom field the user built ad hoc (Admissible Candidates Count filtered to Revenue Bucket = Profitable) as a real measure."
   }
 
   measure: near_miss_count {
@@ -281,19 +281,19 @@ view: price_drop_candidates {
 
   # Why (2026-09-09, DS): Price & Drop funnel's Wins column. Mirrors
   # ci_pricedrop_bot's computePriceDropFunnel() JS exactly: iterates the
-  # Profitable-only `rows` population and counts `r.ed > 0` (eligible_delta
-  # positive). NOT the same as extra_revenue_best_only_sum's population
-  # above (which compares vs. booked-or-eligible, not eligible-only) --
-  # verified 2026-09-09 against 2026-09-08, gds='aerohub', by running
-  # ci_pricedrop_bot's own generate_report.py functions directly: wins=1428.
-  # This SQL (near_miss_bucket='Profitable' AND eligible_delta > 0) matches
-  # that exactly.
+  # FULL admissible population (every revenue bucket -- see
+  # admissible_candidates_count's description for why this is NOT
+  # Profitable-only, a mistake in an earlier version of this measure) and
+  # counts `r.ed > 0` (eligible_delta positive). NOT the same as
+  # extra_revenue_best_only_sum's population above (which compares vs.
+  # booked-or-eligible, not eligible-only). Verified 2026-09-09 against
+  # 2026-09-08, gds='aerohub': wins=1,440 -- matches the dashboard exactly.
   measure: funnel_wins_count {
     type: count_distinct
-    sql: CASE WHEN ${near_miss_bucket} = 'Profitable' AND ${eligible_delta} > 0 THEN ${attempt_id} END ;;
+    sql: CASE WHEN ${eligible_delta} > 0 THEN ${attempt_id} END ;;
     group_label: "5. COUNTS"
     label: "Wins (vs. Best Eligible)"
-    description: "Count of Profitable de-duplicated Price & Drop Admissible candidates that beat the best non-LowRevenue Eligible candidate on their own attempt (eligible_delta > 0). The Price & Drop funnel's Wins column -- matches ci_pricedrop_bot's computePriceDropFunnel() wins count exactly (verified 2026-09-09 against 2026-09-08, gds='aerohub': 1,428)."
+    description: "Count of de-duplicated Price & Drop Admissible candidates (any revenue bucket) that beat the best non-LowRevenue Eligible candidate on their own attempt (eligible_delta > 0). The Price & Drop funnel's Wins column -- matches ci_pricedrop_bot's computePriceDropFunnel() wins count exactly (verified 2026-09-09 against 2026-09-08, gds='aerohub': 1,440)."
   }
 
   # -------------------------
@@ -350,16 +350,18 @@ view: price_drop_candidates {
   # above -- those compare vs. booked-or-eligible-or-$0 and net in losses
   # (extra_revenue_sum) or clip losses to zero but still include losing rows
   # at $0 (extra_revenue_best_only_sum). This one sums eligible_delta
-  # (vs. best Eligible ONLY, never booked) across ONLY the winning rows
-  # (eligible_delta > 0) -- losing rows are excluded entirely, not clipped.
-  # Matches ci_pricedrop_bot's computePriceDropFunnel() extraRevenue exactly
-  # (verified 2026-09-09 against 2026-09-08, gds='aerohub': $37,389.80).
+  # (vs. best Eligible ONLY, never booked) across the FULL admissible
+  # population (any revenue bucket -- see admissible_candidates_count's
+  # description), ONLY over winning rows (eligible_delta > 0) -- losing rows
+  # are excluded entirely, not clipped. Matches ci_pricedrop_bot's
+  # computePriceDropFunnel() extraRevenue exactly (verified 2026-09-09
+  # against 2026-09-08, gds='aerohub': $37,482.28).
   measure: funnel_win_extra_revenue_sum {
     type: sum
-    sql: CASE WHEN ${near_miss_bucket} = 'Profitable' AND ${eligible_delta} > 0 THEN ${eligible_delta} END ;;
+    sql: CASE WHEN ${eligible_delta} > 0 THEN ${eligible_delta} END ;;
     value_format: "$#,##0.00"
     group_label: "6. REVENUE"
     label: "Extra Revenue (Funnel, vs. Best Eligible)"
-    description: "Sum of eligible_delta across Profitable, winning (eligible_delta > 0) Price & Drop Admissible candidates. The Price & Drop funnel's Extra Revenue column -- matches ci_pricedrop_bot's computePriceDropFunnel() exactly (verified 2026-09-09 against 2026-09-08, gds='aerohub': $37,389.80)."
+    description: "Sum of eligible_delta across winning (eligible_delta > 0) Price & Drop Admissible candidates, any revenue bucket. The Price & Drop funnel's Extra Revenue column -- matches ci_pricedrop_bot's computePriceDropFunnel() exactly (verified 2026-09-09 against 2026-09-08, gds='aerohub': $37,482.28)."
   }
 }
