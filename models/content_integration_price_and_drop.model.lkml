@@ -19,19 +19,19 @@ explore: price_drop_candidates {
 explore: price_drop_funnel {
   from: price_drop_any_tag
   label: "CI Price Drop Bot - Funnel"
-  description: "Price & Drop funnel: every content source with Price & Drop tag activity (price_drop_any_tag, the base view here) left-joined to its Admissible candidates (price_drop_candidates), if any. Driving the explore from price_drop_any_tag instead of price_drop_candidates is deliberate -- price_drop_any_tag's (date, gds) coverage is always a superset (an Admissible candidate is itself Price Only-tagged), so a content source with zero Admissible candidates that day (e.g. 'abc') still shows up correctly with zeros instead of disappearing, using plain left_outer (this connection's MySQL dialect does not support full_outer)."
+  description: "Price & Drop funnel: every content source with Price & Drop tag activity (price_drop_any_tag, the base view here) left-joined to its Admissible candidates (price_drop_candidates), if any. Driving the explore from price_drop_any_tag instead of price_drop_candidates is deliberate -- price_drop_any_tag's (date, gds) coverage is always a superset (an Admissible candidate is itself Price Only-tagged), so a content source with zero Admissible candidates that day (e.g. 'abc') still shows up correctly with zeros instead of disappearing, using plain left_outer (this connection's MySQL dialect does not support full_outer). Note: `from:` aliases price_drop_any_tag's fields to this explore's own name (price_drop_funnel.*) everywhere within this explore -- not price_drop_any_tag.* -- see always_filter and the join below."
   persist_with: price_drop_candidates_default_datagroup
 
   always_filter: {
-    filters: [price_drop_any_tag.date_date: "7 days"]
+    filters: [price_drop_funnel.date_date: "7 days"]
   }
 
   join: price_drop_candidates {
     view_label: "Price & Drop Funnel"
     type: left_outer
     relationship: one_to_many
-    sql_on: ${price_drop_any_tag.date_date} = ${price_drop_candidates.date_date}
-        AND ${price_drop_any_tag.gds} = ${price_drop_candidates.gds} ;;
+    sql_on: ${price_drop_funnel.date_date} = ${price_drop_candidates.date_date}
+        AND ${price_drop_funnel.gds} = ${price_drop_candidates.gds} ;;
   }
 }
 
