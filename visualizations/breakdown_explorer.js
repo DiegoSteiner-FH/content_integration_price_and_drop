@@ -13,14 +13,8 @@
 // the same named measures already used elsewhere on the dashboard
 // (Admissible Candidates Count, Total Revenue, Extra Revenue (If Booked),
 // Extra Rev. (Best Only)) rather than two extra raw fields. Average Revenue
-// is NOT read from the query -- it's recomputed per tab as
-// sum(Total Revenue) / sum(Count) across whichever rows share that tab's
-// key, never as an average-of-averages (that would be mathematically wrong
-// once rows are re-grouped to a coarser key). Sums are safe to combine this
-// way because every row's Count is a distinct-attempt count over a set of
-// attempts that appears in exactly one (gds, office, carrier, currency,
-// fare_type, affiliate_id) combination -- no attempt can span two rows, so
-// no double-counting when summing across rows that share one dimension.
+// is NOT read from the query -- it's recomputed per tab (see v6 below for
+// the current denominator).
 //
 // v3 (2026-09-08): style pass -- bigger font, proportional column widths
 // (colgroup) instead of content-driven sizing so a long header like
@@ -35,6 +29,15 @@
 // reasoning as the other count fields) between Admissible Candidates and
 // Total Revenue; renamed the plain "Count" column to "Admissible
 // Candidates" now that there are two count columns.
+//
+// v6 (2026-09-09): fixed Avg Revenue's denominator. revenue_sum (Total
+// Revenue) was scoped to Revenue Bucket = Profitable in the LookML (PR
+// #11), but this viz's avgRevenue was still dividing by admissible
+// candidates count (all three buckets) -- mismatched population,
+// understating the average. Now divides by profitableCount, matching what
+// Total Revenue actually sums over. Same never-average-an-average rule as
+// before, just the correct denominator: sum(Total Revenue) /
+// sum(Profitable Candidates) across whichever rows share a tab's key.
 //
 // Required fields, in this exact query (from the price_drop_candidates
 // explore, grouped by all 6 dims below -- do NOT add Created Date as an
@@ -138,7 +141,8 @@
   // dims at once) down to just the one dimension the active tab represents.
   // Sums are safe across rows sharing a tab key -- see the v2 note at the
   // top of this file for why. Average is always recomputed from the summed
-  // total and summed count, never carried forward as an average-of-averages.
+  // total and summed PROFITABLE count (revenue_sum/Total Revenue is itself
+  // Profitable-only, see v6), never carried forward as an average-of-averages.
   function aggregateBy(rows, fieldName) {
     var groups = {};
     var order = [];
@@ -157,13 +161,15 @@
     });
     return order.map(function (key) {
       var g = groups[key];
-      g.avgRevenue = g.count ? g.totalRevenue / g.count : 0;
+      g.avgRevenue = g.profitableCount ? g.totalRevenue / g.profitableCount : 0;
       return g;
     });
   }
 
   // Grand total row -- avgRevenue recomputed from the totals, same rule as
-  // aggregateBy (never an average of per-row averages).
+  // aggregateBy (never an average of per-row averages; divides by the
+  // summed PROFITABLE count, matching Total Revenue's own Profitable-only
+  // scope).
   function computeTotals(grouped) {
     var t = { count: 0, profitableCount: 0, totalRevenue: 0, extraIfBooked: 0, extraBestOnly: 0 };
     grouped.forEach(function (g) {
@@ -173,7 +179,7 @@
       t.extraIfBooked += g.extraIfBooked;
       t.extraBestOnly += g.extraBestOnly;
     });
-    t.avgRevenue = t.count ? t.totalRevenue / t.count : 0;
+    t.avgRevenue = t.profitableCount ? t.totalRevenue / t.profitableCount : 0;
     return t;
   }
 
