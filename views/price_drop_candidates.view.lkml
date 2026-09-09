@@ -21,6 +21,21 @@ view: price_drop_candidates {
   # 2026-09-02 (bot-matching numbers: 3,128 / $103,072.31 / $32.95 -- new
   # definition: 2,156 / $68,298.79 / $31.68) and 2026-09-03. See
   # near_miss_bucket and eligible_delta below for the mechanics.
+  #
+  # Why (2026-09-09, DS), hard 60-day safety cap: this view is now also
+  # joined into the price_drop_funnel explore (from: price_drop_any_tag),
+  # where {% condition price_drop_candidates.date_date %} below resolves to
+  # "no filter" unless a query explicitly filters this exact field --
+  # deliberately true for that explore (an always_filter on this field there
+  # breaks the LEFT JOIN's NULL preservation for zero-Admissible content
+  # sources like 'abc', see the model file). Without ANY bound, this view's
+  # own window-function chain would scan/rank every Admissible candidate in
+  # the table's entire history -- confirmed to genuinely happen and take a
+  # very long time. The hard cap below is generous enough to never bind for
+  # any normal use of either explore (both default to a 7-day window) but
+  # keeps the worst case (no filter selected at all) to ~60 days instead of
+  # unbounded -- a pure derived-table-internal AND, so it can't reintroduce
+  # the outer-WHERE-clause problem the always_filter version had.
   derived_table: {
     sql:
       WITH admissible AS (
@@ -34,6 +49,7 @@ view: price_drop_candidates {
         WHERE oct.value = 'Price Only'
           AND oc.candidacy = 'Admissible'
           AND oc.revenue > -50
+          AND oc.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)
           AND {% condition price_drop_candidates.date_date %} oc.created_at {% endcondition %}
       ),
       best_per_attempt AS (
