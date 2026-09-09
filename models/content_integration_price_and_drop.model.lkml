@@ -14,6 +14,14 @@ explore: price_drop_candidates {
   always_filter: {
     filters: [price_drop_candidates.date_date: "7 days"]
   }
+
+  join: price_drop_any_tag {
+    view_label: "Price & Drop Funnel"
+    type: left_outer
+    relationship: many_to_many
+    sql_on: ${price_drop_candidates.date_date} = ${price_drop_any_tag.date_date}
+        AND ${price_drop_candidates.gds} = ${price_drop_any_tag.gds} ;;
+  }
 }
 
 explore: price_drop_candidacy_breakdown {

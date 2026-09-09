@@ -15,3 +15,9 @@ visualization: {
   label: "Price Drop Candidacy Breakdown Table"
   file: "visualizations/candidacy_breakdown_table.js"
 }
+
+visualization: {
+  id: "price_drop_funnel_table"
+  label: "Price Drop Funnel Table"
+  file: "visualizations/price_drop_funnel_table.js"
+}
