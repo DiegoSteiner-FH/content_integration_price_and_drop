@@ -45,6 +45,25 @@ view: price_drop_candidates {
   # Funnel's Admissible/Profitable/Extra Revenue columns) had none. Verified
   # for 2026-09-08: 5,819 -> 5,787 admissible tagged candidates (32 removed,
   # all confirmed on test-booking attempts).
+  #
+  # Why (2026-09-10, DS), single_to_multi override applied to best_eligible_
+  # ranked: investigating why attempt 17539461's best_eligible_revenue was
+  # a deeply negative -2151.84 found candidate 1243322861 -- raw
+  # candidacy='Eligible', but its PARENT candidate has reprice_type=
+  # 'single_to_multi'. price_drop_candidacy_breakdown.view.lkml already
+  # force-reclassifies any candidate in that situation to 'Inadmissible'
+  # regardless of its own raw candidacy value; best_eligible_ranked here
+  # never applied that same override, so it could -- and did -- pick a
+  # candidate that should never have counted as a real Eligible baseline.
+  # Verified real scope across 2026-09-04 to 2026-09-10: 23,636 of 454,508
+  # candidacy='Eligible' rows project-wide (~5.2%) should actually be
+  # Inadmissible per this override. Fixed by excluding any candidate whose
+  # parent has reprice_type='single_to_multi' from best_eligible_ranked,
+  # same NOT EXISTS style already used for the LowRevenue exclusion. This
+  # changes best_eligible_revenue_on_attempt, eligible_delta,
+  # near_miss_bucket, and every Profitable/Breakeven/Near-miss-scoped
+  # measure below for any attempt where the previous "best Eligible" pick
+  # was actually superseded.
   derived_table: {
     sql:
       WITH admissible AS (
@@ -91,6 +110,10 @@ view: price_drop_candidates {
             FROM ota.optimizer_candidate_tags octlr
             JOIN ota.optimizer_tags otlr ON otlr.id = octlr.tag_id AND otlr.name = 'LowRevenue'
             WHERE octlr.candidate_id = oc2.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM ota.optimizer_candidates opc
+            WHERE opc.id = oc2.parent_id AND opc.reprice_type = 'single_to_multi'
           )
       ),
       best_eligible AS (
@@ -281,7 +304,7 @@ view: price_drop_candidates {
     group_label: "4. MONETARY"
     label: "Best Eligible Revenue"
     sql: ${TABLE}.best_eligible_revenue ;;
-    description: "Revenue of the best Eligible-candidacy candidate on this attempt, excluding LowRevenue-tagged candidates (a LowRevenue candidate can still be Eligible but would never actually get booked in practice, same exclusion ci_pricedrop_bot applies). Computed once in the derived table's own best_eligible_ranked CTE. Unhidden 2026-09-09 for the Attempt Examples tile (date, carrier, office, fare type, PD rev vs. this baseline, delta) -- this is that tile's 'vs. Best Eligible' column, paired with eligible_delta below."
+    description: "Revenue of the best Eligible-candidacy candidate on this attempt, excluding LowRevenue-tagged candidates and candidates whose parent has reprice_type='single_to_multi' (that override force-reclassifies such a candidate to Inadmissible regardless of its own raw candidacy, same rule price_drop_candidacy_breakdown already applies -- added 2026-09-10 after finding attempt 17539461 was picking exactly such a candidate as its 'best Eligible', a real bug affecting ~5.2% of Eligible candidates project-wide). Computed once in the derived table's own best_eligible_ranked CTE. Unhidden 2026-09-09 for the Attempt Examples tile (date, carrier, office, fare type, PD rev vs. this baseline, delta) -- this is that tile's 'vs. Best Eligible' column, paired with eligible_delta below."
   }
 
   dimension: extra_revenue {
