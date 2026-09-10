@@ -76,6 +76,20 @@ view: price_drop_price_rate {
   # back to $0 -- same fallback convention as eligible_delta elsewhere in
   # this project. Not yet hit a real example of this edge case to confirm
   # against; flagging it as an assumption rather than a verified behavior.
+  #
+  # Why (2026-09-10, DS), attempt_id_filter added: requested a way to filter
+  # this view down to one specific attempt and see its own Revenue Outcome
+  # breakdown. This view is pre-aggregated (grain is date/gds/office/
+  # carrier/fare_type/currency/affiliate_id/outcome -- attempt_id does NOT
+  # survive past the contestants CTE), so a real, groupable attempt_id
+  # dimension isn't possible without un-aggregating the whole view into a
+  # much bigger row-level population (same cost profile as
+  # price_drop_candidates / the Attempt Examples tile). Instead added a
+  # filter-only field (below) whose value is pushed into the derived
+  # table's own WHERE clause via {% condition %} -- same mechanism the date
+  # filter already uses -- so it narrows the contestant population BEFORE
+  # aggregation runs, with no grain or cost change to the aggregated output
+  # itself. Not usable as a group-by/display column, by design.
   derived_table: {
     sql:
       WITH contestants AS (
@@ -90,6 +104,7 @@ view: price_drop_price_rate {
         JOIN ota.optimizer_attempts oa ON oa.id = oc.attempt_id
         WHERE oct.value = 'Price Only'
           AND {% condition price_drop_price_rate.date_date %} oc.created_at {% endcondition %}
+          AND {% condition price_drop_price_rate.attempt_id_filter %} oc.attempt_id {% endcondition %}
           AND NOT EXISTS (
             SELECT 1 FROM ota.optimizer_attempt_bookings oab
             JOIN ota.bookings b ON b.id = oab.booking_id
@@ -153,6 +168,13 @@ view: price_drop_price_rate {
   # -------------------------
   # 2. CONTESTANT INFO
   # -------------------------
+
+  filter: attempt_id_filter {
+    type: number
+    group_label: "2. CONTESTANT INFO"
+    label: "Attempt ID"
+    description: "Filter-only -- narrows the underlying contestant population to one specific ota.optimizer_attempts.id before aggregation runs (pushed into the derived table's own WHERE clause via {% condition %}, same mechanism as the date filter). Not a real output column: this view is pre-aggregated and does not carry attempt_id past its own derived table's contestants CTE, so it can't be used as a group-by/display dimension -- filter to a single attempt to see just that one attempt's own Revenue Outcome breakdown."
+  }
 
   dimension: gds {
     type: string
