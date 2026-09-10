@@ -16,6 +16,13 @@
 // to that one source BEFORE the existing date-level aggregation runs, so
 // grouping-by-date is unchanged -- only which rows feed it changes.
 //
+// v3 (2026-09-10): column labels relabeled "% Better/Same/Worse Revenue"
+// (was "... Price") -- the underlying outcome field switched from a
+// base+tax price comparison to a revenue comparison (see
+// price_drop_price_rate.view.lkml) after a real example showed a
+// currency-conversion merchant fee making a numerically cheaper price
+// actually revenue-negative. Field names/required fields/viz id unchanged.
+//
 // Required fields, in this exact query (from the price_drop_price_rate
 // explore, flat/non-pivoted, no Looker-level pivot):
 //   price_drop_price_rate.date_date
@@ -40,9 +47,9 @@
   var ALL_TAB = "__all__";
 
   var OUTCOME_COLUMNS = [
-    { key: "better", label: "% Better Price" },
-    { key: "same", label: "% Same Price" },
-    { key: "worse", label: "% Worse Price" },
+    { key: "better", label: "% Better Revenue" },
+    { key: "same", label: "% Same Revenue" },
+    { key: "worse", label: "% Worse Revenue" },
     { key: "no_price", label: "% No Price" }
   ];
 
