@@ -102,6 +102,15 @@ view: price_drop_price_rate {
   # model with "Liquid parse exception: Missing End Tag" until fixed by
   # describing the mechanism in plain English instead of literal Liquid
   # tag syntax.
+  #
+  # Why (2026-09-10, DS), single_to_multi override applied to best_eligible_
+  # ranked: same gap and same fix as price_drop_candidates.view.lkml /
+  # price_drop_share_rows.view.lkml -- this view's own best_eligible_ranked
+  # CTE only checked candidacy='Eligible' on the raw column, never applying
+  # the force-reclassify-to-Inadmissible override for a candidate whose
+  # parent has reprice_type='single_to_multi' (price_drop_candidacy_
+  # breakdown.view.lkml already applies this rule). Affects the Revenue
+  # Rate outcome comparison's own baseline.
   derived_table: {
     sql:
       WITH contestants AS (
@@ -138,6 +147,10 @@ view: price_drop_price_rate {
             FROM ota.optimizer_candidate_tags oct_lr
             JOIN ota.optimizer_tags ot_lr ON ot_lr.id = oct_lr.tag_id AND ot_lr.name = 'LowRevenue'
             WHERE oct_lr.candidate_id = oc2.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM ota.optimizer_candidates opc
+            WHERE opc.id = oc2.parent_id AND opc.reprice_type = 'single_to_multi'
           )
       ),
       best_eligible AS (
