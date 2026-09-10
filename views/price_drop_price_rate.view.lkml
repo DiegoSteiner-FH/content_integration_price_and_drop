@@ -86,10 +86,22 @@ view: price_drop_price_rate {
   # much bigger row-level population (same cost profile as
   # price_drop_candidates / the Attempt Examples tile). Instead added a
   # filter-only field (below) whose value is pushed into the derived
-  # table's own WHERE clause via {% condition %} -- same mechanism the date
-  # filter already uses -- so it narrows the contestant population BEFORE
-  # aggregation runs, with no grain or cost change to the aggregated output
-  # itself. Not usable as a group-by/display column, by design.
+  # table's own WHERE clause via a Liquid condition tag -- same mechanism
+  # the date filter already uses -- so it narrows the contestant
+  # population BEFORE aggregation runs, with no grain or cost change to
+  # the aggregated output itself. Not usable as a group-by/display column,
+  # by design.
+  #
+  # Why (2026-09-10, DS), hotfix -- broken Liquid tag in a description:
+  # attempt_id_filter's own description string originally contained a
+  # literal, unclosed "condition" Liquid tag (no field argument, no
+  # matching end tag) meant purely as human-readable prose -- but
+  # description: strings get Liquid-processed too, unlike a # comment
+  # (which is stripped before compilation and can safely mention the same
+  # phrase, as this comment block does throughout). That broke the whole
+  # model with "Liquid parse exception: Missing End Tag" until fixed by
+  # describing the mechanism in plain English instead of literal Liquid
+  # tag syntax.
   derived_table: {
     sql:
       WITH contestants AS (
@@ -173,7 +185,7 @@ view: price_drop_price_rate {
     type: number
     group_label: "2. CONTESTANT INFO"
     label: "Attempt ID"
-    description: "Filter-only -- narrows the underlying contestant population to one specific ota.optimizer_attempts.id before aggregation runs (pushed into the derived table's own WHERE clause via {% condition %}, same mechanism as the date filter). Not a real output column: this view is pre-aggregated and does not carry attempt_id past its own derived table's contestants CTE, so it can't be used as a group-by/display dimension -- filter to a single attempt to see just that one attempt's own Revenue Outcome breakdown."
+    description: "Filter-only -- narrows the underlying contestant population to one specific ota.optimizer_attempts.id before aggregation runs (pushed into the derived table's own WHERE clause via Looker's condition-tag mechanism, same as the date filter). Not a real output column: this view is pre-aggregated and does not carry attempt_id past its own derived table's contestants CTE, so it can't be used as a group-by/display dimension -- filter to a single attempt to see just that one attempt's own Revenue Outcome breakdown."
   }
 
   dimension: gds {
