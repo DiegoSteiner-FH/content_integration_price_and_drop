@@ -303,9 +303,9 @@ view: price_drop_candidates {
   # $0 fallback above (though that one only reaches $0 after also checking
   # for a real booking, which this comparison deliberately ignores).
   dimension: eligible_delta {
-    hidden: yes
     type: number
     value_format: "$#,##0.00"
+    group_label: "4. MONETARY"
     label: "Delta (vs. Best Eligible)"
     sql: ${revenue} - COALESCE(${best_eligible_revenue_on_attempt}, 0) ;;
     description: "This candidate's revenue minus the best non-LowRevenue Eligible candidate's revenue on the same attempt, falling back to $0 when no Eligible candidate exists on the attempt at all. NEVER considers what was actually booked, unlike extra_revenue above -- a genuinely different comparison. Drives near_miss_bucket (and therefore profitable_candidates_count / revenue_sum / average_revenue / near_miss_count) and extra_revenue_best_only_sum below. Unhidden 2026-09-09 for the Attempt Examples tile -- its per-row 'Delta' column, the same figure extra_revenue_best_only_sum sums across Profitable candidates."
