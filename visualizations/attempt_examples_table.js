@@ -47,6 +47,9 @@
 // preventDefault()/stopPropagation() -- the click can no longer reach
 // whatever outer listener was triggering the second tab.
 //
+// v4 (2026-09-10): removed the totals footer row (attempt count + summed
+// delta) -- requested removal, no longer rendered.
+//
 // Required fields (flat, no pivot):
 //   price_drop_candidates.attempt_id
 //   price_drop_candidates.date_date
@@ -92,7 +95,6 @@
     table.pd-ae-table td { padding: 10px 12px; border-bottom: 1px solid #f1f3f5; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\
     table.pd-ae-table td.mono { font-variant-numeric: tabular-nums; }\
     table.pd-ae-table tbody tr:hover td { background: #f7f8fa; }\
-    table.pd-ae-table tfoot td { font-weight: 700; border-top: 2px solid #e5e7eb; border-bottom: none; background: #f7f8fa; position: sticky; bottom: 0; z-index: 2; }\
     .pd-ae-pos { color: #16a34a; }\
     .pd-ae-neg { color: #dc2626; }\
     .pd-ae-sort-arrow { margin-left: 3px; font-size: 10px; }\
@@ -120,10 +122,6 @@
       return fallback === undefined ? "(none)" : fallback;
     }
     return String(cell.value);
-  }
-
-  function fmtInt(n) {
-    return n.toLocaleString();
   }
 
   function fmtMoney(n) {
@@ -273,15 +271,10 @@
         ? rows.map(rowHtml).join("")
         : '<tr><td colspan="' + colCount + '" class="pd-ae-empty">No rows for this date range / filter selection</td></tr>';
 
-      var totalDelta = rows.reduce(function (s, r) { return s + r.delta; }, 0);
-      var footHtml = rows.length
-        ? '<tr><td colspan="' + (colCount - 1) + '">' + fmtInt(rows.length) + " attempts</td><td class=\"num " + (totalDelta > 0 ? "pd-ae-pos" : totalDelta < 0 ? "pd-ae-neg" : "") + '">' + fmtMoneySigned(totalDelta) + "</td></tr>"
-        : "";
-
       root.innerHTML =
         '<div class="pd-ae-tabs">' + tabsHtml + "</div>" +
         '<div class="pd-ae-wrap"><table class="pd-ae-table"><thead><tr>' +
-        headHtml + "</tr></thead><tbody>" + bodyHtml + "</tbody><tfoot>" + footHtml + "</tfoot></table></div>";
+        headHtml + "</tr></thead><tbody>" + bodyHtml + "</tbody></table></div>";
 
       root.querySelectorAll(".pd-ae-tab").forEach(function (el) {
         el.addEventListener("click", function () {
