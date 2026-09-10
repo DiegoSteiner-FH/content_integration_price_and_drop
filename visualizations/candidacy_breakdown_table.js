@@ -15,23 +15,39 @@
 // it, same rule the bot's dashboard uses so header order never drifts
 // between the two.
 //
+// v2 (2026-09-10): added per-content-source tabs, built dynamically from
+// whatever GDS values are present in the raw query rows each render -- no
+// hardcoded list, same pattern as price_drop_funnel_table.js's tabs. An
+// "All" tab (first, default) aggregates every source together, identical
+// to this viz's original behavior; a GDS-specific tab filters the raw rows
+// to that one source BEFORE the existing date-level aggregation runs --
+// including which candidacy columns appear, since a single content
+// source's own candidacy values (still FIXED_ORDER-first, then
+// alphabetical for the rest) can be a narrower set than the All-sources
+// column set.
+//
 // Required fields, in this exact query (from the price_drop_candidacy_breakdown
 // explore, flat/non-pivoted, no Looker-level pivot):
 //   price_drop_candidacy_breakdown.date_date
+//   price_drop_candidacy_breakdown.gds
 //   price_drop_candidacy_breakdown.candidacy
 //   price_drop_candidacy_breakdown.total_contestants_count
 //
-// Any other fields in the query (gds/office/carrier/etc.) are ignored for
-// grouping -- rows are always grouped by date only. Add a filter on those
-// fields instead of a query dimension if you want to narrow the population.
+// Any OTHER fields in the query (office/carrier/etc.) are still ignored for
+// grouping -- rows are always grouped by date (and now optionally filtered
+// by the active GDS tab). Add a filter on those fields instead of a query
+// dimension if you want to narrow the population further.
 
 (function () {
   var VIEW = "price_drop_candidacy_breakdown";
   var DATE_FIELD = VIEW + ".date_date";
+  var GDS_FIELD = VIEW + ".gds";
   var CANDIDACY_FIELD = VIEW + ".candidacy";
   var COUNT_FIELD = VIEW + ".total_contestants_count";
 
-  var REQUIRED_FIELDS = [DATE_FIELD, CANDIDACY_FIELD, COUNT_FIELD];
+  var REQUIRED_FIELDS = [DATE_FIELD, GDS_FIELD, CANDIDACY_FIELD, COUNT_FIELD];
+
+  var ALL_TAB = "__all__";
 
   var FIXED_ORDER = [
     "Admissible", "Unmatchable", "Unprofitable", "Unbookable",
@@ -40,6 +56,10 @@
 
   var CSS = "\
     .pd-cb { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size: 15px; color: #111827; height: 100%; overflow: auto; }\
+    .pd-cb-tabs { display: flex; gap: 4px; border-bottom: 1px solid #e5e7eb; padding: 0 4px; flex-wrap: wrap; }\
+    .pd-cb-tab { padding: 10px 16px; cursor: pointer; font-weight: 600; font-size: 14px; color: #6b7280; border-bottom: 2px solid transparent; user-select: none; }\
+    .pd-cb-tab:hover { color: #111827; }\
+    .pd-cb-tab.active { color: #2545d9; border-bottom-color: #2545d9; }\
     .pd-cb-wrap { padding: 8px 4px; }\
     table.pd-cb-table { width: 100%; border-collapse: collapse; }\
     table.pd-cb-table th { text-align: left; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #9ca3af; padding: 10px 12px; cursor: pointer; white-space: normal; line-height: 1.35; vertical-align: bottom; border-bottom: 1px solid #e5e7eb; position: sticky; top: 0; background: #fff; z-index: 2; }\
@@ -88,9 +108,28 @@
     return "rgba(22, 163, 74, " + alpha.toFixed(3) + ")";
   }
 
+  // Distinct GDS values present in the raw (pre-aggregation) rows, ordered
+  // by each source's own total contestant count descending -- most active
+  // content source first. Built fresh every render, same no-hardcoded-list
+  // pattern as price_drop_funnel_table.js's tabs.
+  function distinctGds(rawRows) {
+    var totals = {};
+    var order = [];
+    rawRows.forEach(function (row) {
+      var g = strVal(row[GDS_FIELD]);
+      if (!(g in totals)) { totals[g] = 0; order.push(g); }
+      totals[g] += numVal(row[COUNT_FIELD]);
+    });
+    order.sort(function (a, b) { return totals[b] - totals[a]; });
+    return order;
+  }
+
   // One row per date: { date, total, counts: { candidacyValue: count } }.
-  // Also returns the full set of distinct candidacy values seen, ordered
-  // FIXED_ORDER-first then alphabetically for anything outside that list.
+  // Also returns the full set of distinct candidacy values seen in the
+  // rows passed in, ordered FIXED_ORDER-first then alphabetically for
+  // anything outside that list -- computed from whatever rows are actually
+  // passed in (the active GDS tab's own subset, or every row on "All"), so
+  // the column set narrows correctly for a single content source.
   function buildRows(rawRows) {
     var byDate = {};
     var order = [];
@@ -132,6 +171,7 @@
       element.innerHTML = '<div class="pd-cb"></div>';
       this._rows = [];
       this._sort = { col: "date", dir: "desc" };
+      this._activeTab = ALL_TAB;
     },
 
     updateAsync: function (data, element, config, queryResponse, details, done) {
@@ -160,7 +200,17 @@
     render: function () {
       var self = this;
       var root = this._element.querySelector(".pd-cb");
-      var built = buildRows(this._rows);
+      var gdsList = distinctGds(this._rows);
+
+      if (self._activeTab !== ALL_TAB && gdsList.indexOf(self._activeTab) === -1) {
+        self._activeTab = ALL_TAB;
+      }
+
+      var rawRows = self._activeTab === ALL_TAB
+        ? this._rows
+        : this._rows.filter(function (row) { return strVal(row[GDS_FIELD]) === self._activeTab; });
+
+      var built = buildRows(rawRows);
       var rows = built.rows;
       var columns = built.columns;
 
@@ -178,6 +228,12 @@
       function sortArrow(col) {
         return sortCol === col ? '<span class="pd-cb-sort-arrow">' + (self._sort.dir === "desc" ? "▼" : "▲") + "</span>" : "";
       }
+
+      var tabsHtml = ['<div class="pd-cb-tab' + (self._activeTab === ALL_TAB ? " active" : "") + '" data-tab="' + ALL_TAB + '">All</div>']
+        .concat(gdsList.map(function (g) {
+          var cls = "pd-cb-tab" + (g === self._activeTab ? " active" : "");
+          return '<div class="' + cls + '" data-tab="' + g + '">' + g + "</div>";
+        })).join("");
 
       var headHtml = '<th data-col="date">Date' + sortArrow("date") + "</th>" +
         '<th class="num" data-col="total">Total Contestants' + sortArrow("total") + "</th>" +
@@ -206,9 +262,16 @@
       var footHtml = rows.length ? rowHtml(computeTotals(rows, columns), true) : "";
 
       root.innerHTML =
+        '<div class="pd-cb-tabs">' + tabsHtml + "</div>" +
         '<div class="pd-cb-wrap"><table class="pd-cb-table"><thead><tr>' +
         headHtml + "</tr></thead><tbody>" + bodyHtml + "</tbody><tfoot>" + footHtml + "</tfoot></table></div>";
 
+      root.querySelectorAll(".pd-cb-tab").forEach(function (el) {
+        el.addEventListener("click", function () {
+          self._activeTab = el.getAttribute("data-tab");
+          self.render();
+        });
+      });
       root.querySelectorAll("th").forEach(function (el) {
         el.addEventListener("click", function () {
           var col = el.getAttribute("data-col");
