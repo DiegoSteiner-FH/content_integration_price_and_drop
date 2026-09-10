@@ -65,6 +65,15 @@ view: price_drop_share_rows {
   # admissible (the real-booking side "Today" also draws from, where a
   # test booking would misrepresent the real content-source mix just as
   # much as on the tagged side).
+  #
+  # Why (2026-09-10, DS), single_to_multi override applied to best_eligible_
+  # ranked: same gap and same fix as price_drop_candidates.view.lkml --
+  # this view's own best_eligible_ranked CTE only checked candidacy=
+  # 'Eligible' on the raw column, never applying the force-reclassify-to-
+  # Inadmissible override for a candidate whose parent has reprice_type=
+  # 'single_to_multi' (price_drop_candidacy_breakdown.view.lkml already
+  # applies this rule). Affects eligible_delta and therefore which content
+  # source wins a row in the "If Live" panel.
   derived_table: {
     sql:
       WITH admissible_by_gds AS (
@@ -108,6 +117,10 @@ view: price_drop_share_rows {
             FROM ota.optimizer_candidate_tags octlr
             JOIN ota.optimizer_tags otlr ON otlr.id = octlr.tag_id AND otlr.name = 'LowRevenue'
             WHERE octlr.candidate_id = oc2.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM ota.optimizer_candidates opc
+            WHERE opc.id = oc2.parent_id AND opc.reprice_type = 'single_to_multi'
           )
       ),
       best_eligible AS (
