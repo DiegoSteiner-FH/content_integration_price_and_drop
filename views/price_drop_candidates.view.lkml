@@ -37,6 +37,14 @@ view: price_drop_candidates {
   # generous margin above either explore's 7-day default window, still a
   # pure derived-table-internal AND, so it can't reintroduce the
   # outer-WHERE-clause problem the always_filter version had.
+  #
+  # Why (2026-09-10, DS), test bookings excluded: requested to exclude test
+  # bookings across every population in this project, not just Candidacy
+  # Breakdown / Price Rate (which already had this NOT EXISTS check). This
+  # view (feeds the CI Price Drop Bot explore, Attempt Examples, and the
+  # Funnel's Admissible/Profitable/Extra Revenue columns) had none. Verified
+  # for 2026-09-08: 5,819 -> 5,787 admissible tagged candidates (32 removed,
+  # all confirmed on test-booking attempts).
   derived_table: {
     sql:
       WITH admissible AS (
@@ -52,6 +60,12 @@ view: price_drop_candidates {
           AND oc.revenue > -50
           AND oc.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
           AND {% condition price_drop_candidates.date_date %} oc.created_at {% endcondition %}
+          AND NOT EXISTS (
+            SELECT 1 FROM ota.optimizer_attempt_bookings oab
+            JOIN ota.bookings b ON b.id = oab.booking_id
+            WHERE oab.attempt_id = oc.attempt_id
+              AND (b.is_test = 1 OR b.cancel_reason = 'test')
+          )
       ),
       best_per_attempt AS (
         SELECT * FROM admissible WHERE rn = 1
