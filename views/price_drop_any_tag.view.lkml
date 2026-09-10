@@ -68,6 +68,17 @@ view: price_drop_any_tag {
   # candidacy) and price_drop_candidates' own winning Admissible candidate
   # are picked by two different ROW_NUMBER rankings and aren't guaranteed
   # to agree on carrier for the same attempt.
+  #
+  # Why (2026-09-10, DS), test bookings excluded: requested to exclude test
+  # bookings across every population in this project, not just Candidacy
+  # Breakdown / Price Rate (which already had this NOT EXISTS check). This
+  # view had none, which is exactly why a content source whose only tagged
+  # candidate that day sat on a test-booking attempt showed up in the
+  # Funnel but nowhere else (confirmed live: 'voyzant', 4/4 tagged
+  # candidates on 2026-09-10 all on test-booking attempts). Verified for
+  # 2026-09-08: 91,614 -> 91,189 tagged candidates -- 91,189 is the exact
+  # total already established for Candidacy Breakdown/Price Rate that same
+  # day, confirming this brings the three populations into alignment.
   derived_table: {
     sql:
       WITH tagged AS (
@@ -81,6 +92,12 @@ view: price_drop_any_tag {
         JOIN ota.optimizer_tags ot ON ot.id = oct.tag_id AND ot.name = 'Dropped'
         WHERE oct.value = 'Price Only'
           AND {% condition price_drop_funnel.date_date %} oc.created_at {% endcondition %}
+          AND NOT EXISTS (
+            SELECT 1 FROM ota.optimizer_attempt_bookings oab
+            JOIN ota.bookings b ON b.id = oab.booking_id
+            WHERE oab.attempt_id = oc.attempt_id
+              AND (b.is_test = 1 OR b.cancel_reason = 'test')
+          )
       )
       SELECT d, gds, COUNT(*) AS n
       FROM tagged
