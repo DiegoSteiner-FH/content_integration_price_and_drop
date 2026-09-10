@@ -46,8 +46,8 @@ explore: price_drop_candidacy_breakdown {
 }
 
 explore: price_drop_price_rate {
-  label: "CI Price Drop Bot - Price Rate"
-  description: "Same population as Candidacy Breakdown, classified by revenue vs. booked/eligible baseline instead of by candidacy label — mirrors ci_pricedrop_bot's Price Rate tile."
+  label: "CI Price Drop Bot - Revenue Rate"
+  description: "Same population as Candidacy Breakdown, classified by revenue vs. the best Eligible candidate's own revenue (gated to candidacy='Admissible' for 'better'/'same') instead of by candidacy label. Retitled 2026-09-10 from a base+tax price comparison to a revenue comparison -- see price_drop_price_rate.view.lkml for the full reasoning."
   persist_with: price_drop_candidates_default_datagroup
 
   always_filter: {
