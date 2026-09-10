@@ -57,6 +57,14 @@ view: price_drop_share_rows {
   # carriers -- rare in practice, and this view was never meant to
   # attribute carrier per-source, only to let you filter/breakdown Content
   # Source Share by the attempt's own carrier, same as every other tile.
+  #
+  # Why (2026-09-10, DS), test bookings excluded: requested to exclude test
+  # bookings across every population in this project. Added to BOTH
+  # branches -- admissible_by_gds (the admissible-tagged side, same
+  # exclusion as price_drop_candidates now has) and booked_without_
+  # admissible (the real-booking side "Today" also draws from, where a
+  # test booking would misrepresent the real content-source mix just as
+  # much as on the tagged side).
   derived_table: {
     sql:
       WITH admissible_by_gds AS (
@@ -72,6 +80,12 @@ view: price_drop_share_rows {
           AND oc.revenue > -50
           AND oc.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
           AND {% condition price_drop_share.date_date %} oc.created_at {% endcondition %}
+          AND NOT EXISTS (
+            SELECT 1 FROM ota.optimizer_attempt_bookings oab
+            JOIN ota.bookings b ON b.id = oab.booking_id
+            WHERE oab.attempt_id = oc.attempt_id
+              AND (b.is_test = 1 OR b.cancel_reason = 'test')
+          )
       ),
       best_per_gds AS (
         SELECT * FROM admissible_by_gds WHERE rn = 1
@@ -128,6 +142,11 @@ view: price_drop_share_rows {
         WHERE oa.created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
           AND {% condition price_drop_share.date_date %} oa.created_at {% endcondition %}
           AND oab.attempt_id NOT IN (SELECT attempt_id FROM admissible_attempts)
+          AND NOT EXISTS (
+            SELECT 1 FROM ota.bookings b2
+            WHERE b2.id = oab.booking_id
+              AND (b2.is_test = 1 OR b2.cancel_reason = 'test')
+          )
       ),
       booked_without_admissible_best AS (
         SELECT attempt_id, booked_gds, carrier, created_at FROM booked_without_admissible WHERE rn = 1
