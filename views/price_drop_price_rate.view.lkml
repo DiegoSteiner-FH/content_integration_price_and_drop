@@ -2,15 +2,9 @@ view: price_drop_price_rate {
   # Why (2026-09-08, DS): rule 1 escape hatch -- ports ci_pricedrop_bot's
   # PRICE_RATE_SQL (generate_report.py) directly. Same population as
   # price_drop_candidacy_breakdown, classified by revenue vs. baseline
-  # instead of by candidacy label. Baseline is booked (status='issued',
-  # is_test=0 -- stricter than price_drop_candidates' own
-  # booked_revenue_on_attempt, which intentionally has no status filter for
-  # that Admissible-only slice; this is a genuinely different "booked"
-  # definition for this broader population, matching the bot's own
-  # PRICE_RATE_SQL exactly) then best non-LowRevenue Eligible candidate, then
-  # null ("no_price"). Pre-aggregated to (date, gds, office, carrier,
-  # fare_type, currency, affiliate_id, outcome) inside the derived table, same
-  # size rationale as price_drop_candidacy_breakdown.
+  # instead of by candidacy label. Pre-aggregated to (date, gds, office,
+  # carrier, fare_type, currency, affiliate_id, outcome) inside the derived
+  # table, same size rationale as price_drop_candidacy_breakdown.
   #
   # Why (2026-09-08, DS), fare_type/currency/affiliate_id added: affiliate_id
   # does not exist on ota.optimizer_candidates -- it lives on
@@ -25,13 +19,9 @@ view: price_drop_price_rate {
   # best_eligible_ranked, instead of using the existing attempt_id_idx index.
   # Fixed by materializing the distinct attempt-id list once
   # (distinct_contestant_attempts) and STRAIGHT_JOIN + FORCE INDEX
-  # (attempt_id_idx)-ing both booked_ranked and best_eligible_ranked against
-  # it, so the small attempt-id list drives the lookup instead of a
-  # full-table scan deciding membership row by row. Verified via
-  # EXPLAIN ANALYZE on 2026-09-02 before/after: the 33.8s full scan is
-  # replaced by an indexed lookup, and total single-day query time drops from
-  # 81.8s to 33.1s (2.5x). WHERE conditions and output were unchanged by this
-  # specific fix -- same rows, same values, only join strategy changed.
+  # (attempt_id_idx)-ing best_eligible_ranked against it, so the small
+  # attempt-id list drives the lookup instead of a full-table scan deciding
+  # membership row by row.
   #
   # Why (2026-09-09, DS), population narrowed to tag-only rows: originally
   # every candidate belonging to a GDS active for Price & Drop that day (any
@@ -54,13 +44,45 @@ view: price_drop_price_rate {
   # against 2026-09-08: total contestants 687,636 -> 91,189 (no_price 61037 /
   # worse 24733 / better 5198 / same 221), matching price_drop_candidacy_
   # breakdown's new total and ci_pricedrop_bot's updated report exactly.
+  #
+  # Why (2026-09-10, DS), retitled "Revenue Rate" -- outcome compares REVENUE
+  # (not base+tax price, and not the older booked-then-eligible-then-$0
+  # chain either), gated on Admissible: a same-day earlier attempt at this
+  # (comparing base+tax price directly) hit a real counterexample on attempt
+  # 17631681 -- a CAD travelportplus candidate had a cheaper base+tax than
+  # the best Eligible candidate, but once its merchant_fee (currency
+  # conversion cost, 38.20) was applied its actual revenue was -12.22, while
+  # a sibling USD candidate on the SAME attempt/GDS had a less competitive
+  # price but +16.00 revenue. Price and revenue can disagree whenever
+  # currency-conversion fees, markup, or commission differ between
+  # candidates -- base+tax never reflects any of that. Comparing revenue
+  # directly (what the business actually cares about, per the analyst who
+  # owns this dashboard) resolves this with no extra per-attempt-winner
+  # de-dup step needed: both travelportplus rows above correctly come out
+  # 'worse' against the best Eligible's own revenue (18.00) once revenue is
+  # the metric, no special-casing required.
+  #
+  # The Admissible gate carries over unchanged from that same-day attempt:
+  # 'better'/'same' can only ever be assigned to a candidacy='Admissible'
+  # row -- orthogonal to the metric swap, still a safeguard against a
+  # non-bookable row looking like a false "win" on whichever metric is used.
+  # Best Eligible is still selected by revenue DESC (this project's existing
+  # "best Eligible" convention, unchanged everywhere else); the ONLY change
+  # from that convention is that this view no longer carries a base+tax
+  # total for it at all (reverted -- best_eligible_ranked/best_eligible only
+  # carry revenue again).
+  # Assumption: when an attempt's tagged population has NO Eligible
+  # candidate at all (best_eligible_revenue is NULL), the baseline falls
+  # back to $0 -- same fallback convention as eligible_delta elsewhere in
+  # this project. Not yet hit a real example of this edge case to confirm
+  # against; flagging it as an assumption rather than a verified behavior.
   derived_table: {
     sql:
       WITH contestants AS (
         SELECT
           oc.id AS candidate_id, oc.attempt_id, oc.gds, oc.gds_account_id AS office_id,
           oc.validating_carrier AS carrier, oc.fare_type, oc.currency, oa.affiliate_id,
-          oc.revenue, DATE(oc.created_at) AS d
+          oc.candidacy, oc.revenue, DATE(oc.created_at) AS d
         FROM ota.optimizer_candidates oc
         JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
          AND {% condition price_drop_price_rate.date_date %} oct.created_at {% endcondition %}
@@ -77,18 +99,6 @@ view: price_drop_price_rate {
       ),
       distinct_contestant_attempts AS (
         SELECT DISTINCT attempt_id FROM contestants
-      ),
-      booked_ranked AS (
-        SELECT oab.attempt_id, bc.revenue AS booked_revenue,
-          ROW_NUMBER() OVER (PARTITION BY oab.attempt_id ORDER BY bc.revenue DESC, bc.id ASC) AS rn
-        FROM distinct_contestant_attempts dca
-        STRAIGHT_JOIN ota.optimizer_attempt_bookings oab ON oab.attempt_id = dca.attempt_id
-        JOIN ota.optimizer_candidates bc ON bc.id = oab.candidate_id
-        JOIN ota.bookings b ON b.id = oab.booking_id
-        WHERE b.status = 'issued' AND b.is_test = 0
-      ),
-      booked AS (
-        SELECT attempt_id, booked_revenue FROM booked_ranked WHERE rn = 1
       ),
       best_eligible_ranked AS (
         SELECT oc2.attempt_id, oc2.revenue AS best_eligible_revenue,
@@ -116,13 +126,12 @@ view: price_drop_price_rate {
         ct.affiliate_id,
         CASE
           WHEN ct.revenue IS NULL THEN 'no_price'
-          WHEN ct.revenue > COALESCE(bk.booked_revenue, be.best_eligible_revenue, 0) THEN 'better'
-          WHEN ct.revenue = COALESCE(bk.booked_revenue, be.best_eligible_revenue, 0) THEN 'same'
+          WHEN ct.candidacy = 'Admissible' AND ct.revenue > COALESCE(be.best_eligible_revenue, 0) THEN 'better'
+          WHEN ct.candidacy = 'Admissible' AND ct.revenue = COALESCE(be.best_eligible_revenue, 0) THEN 'same'
           ELSE 'worse'
         END AS outcome,
         COUNT(*) AS n
       FROM contestants ct
-      LEFT JOIN booked bk ON bk.attempt_id = ct.attempt_id
       LEFT JOIN best_eligible be ON be.attempt_id = ct.attempt_id
       GROUP BY ct.d, ct.gds, ct.office_id, ct.carrier, ct.fare_type, ct.currency, ct.affiliate_id, outcome
     ;;
@@ -200,10 +209,10 @@ view: price_drop_price_rate {
   dimension: outcome {
     type: string
     group_label: "3. OUTCOME"
-    label: "Price Outcome"
+    label: "Revenue Outcome"
     sql: ${TABLE}.outcome ;;
     suggestions: ["better", "same", "worse", "no_price"]
-    description: "'no_price': the contestant's own revenue is NULL (the repricing attempt never produced a usable price). 'better'/'same'/'worse': the contestant's own revenue vs. baseline, where baseline is the booked candidate on that attempt (status='issued', is_test=0) if one exists, else the best non-LowRevenue Eligible candidate, else $0."
+    description: "'no_price': the contestant has no revenue at all (the repricing attempt never produced a usable price). Otherwise, the contestant's own revenue vs. the best non-LowRevenue Eligible candidate's own revenue on the same attempt ($0 if no Eligible candidate exists at all -- see the derived table's own comments for that edge case). 'better'/'same' can ONLY be assigned when the contestant's own candidacy is 'Admissible' -- a non-Admissible candidate with a real revenue value always resolves to 'worse', even if its own revenue happens to be numerically higher than the baseline, since a non-Admissible fare was never actually bookable at that price. Retitled 2026-09-10 from a price (base+tax) comparison to a revenue comparison -- a real example (attempt 17631681) showed price and revenue disagreeing once a currency-conversion merchant fee was involved; revenue is what this dashboard's owner actually cares about, and comparing it directly needs no extra per-attempt-winner logic to handle that case correctly."
   }
 
   # -------------------------
@@ -215,6 +224,6 @@ view: price_drop_price_rate {
     sql: ${TABLE}.n ;;
     group_label: "4. COUNTS"
     label: "Total Contestants"
-    description: "Sum of pre-aggregated contestant counts. Pivot on Price Outcome in the tile to reproduce ci_pricedrop_bot's Price Rate table shape (one column per outcome); use a % of total table calculation for the percentage columns."
+    description: "Sum of pre-aggregated contestant counts. Pivot on Revenue Outcome in the tile to reproduce the Revenue Rate table shape (one column per outcome); use a % of total table calculation for the percentage columns."
   }
 }
