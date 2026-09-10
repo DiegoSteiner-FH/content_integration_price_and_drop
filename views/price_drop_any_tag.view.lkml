@@ -48,11 +48,30 @@ view: price_drop_any_tag {
   # derived_table SQL, not just always_filter/join sql_on in the model
   # file (that mistake was already fixed once for the model file; missed
   # this spot the first time).
+  #
+  # Why (2026-09-10, DS), carrier added to the grain: requested a
+  # Validating Carrier dimension on the Funnel explore. Added HERE (the
+  # funnel's base view), deliberately not on price_drop_candidates (the
+  # joined "many" side) -- filtering on that joined view's own carrier
+  # field would reopen the exact LEFT JOIN NULL-preservation bug already
+  # fixed twice this session (price_drop_candidates.date_date, then
+  # price_drop_share_rows' equivalent): an outer WHERE-level filter on a
+  # field that's NULL for zero-Admissible content sources (like 'abc')
+  # silently drops that entire row. This view's own carrier field has no
+  # such risk -- it's on the base/superset side of the join, populated for
+  # every row. No value change for any existing query: every current
+  # measure sums this view's `n` (attempts_with_price_drop_count is a
+  # plain SUM), and splitting one (date, gds) row into several
+  # (date, gds, carrier) rows always sums back to the identical total when
+  # carrier isn't selected or filtered on. Primary key extended to include
+  # carrier to match the new (date, gds, carrier) grain -- unchanged
+  # concat-of-already-selected-columns approach, still zero extra query
+  # cost.
   derived_table: {
     sql:
       WITH tagged AS (
         SELECT
-          oc.id AS candidate_id, oc.attempt_id, oc.gds,
+          oc.id AS candidate_id, oc.attempt_id, oc.gds, oc.validating_carrier AS carrier,
           DATE(oc.created_at) AS d,
           ROW_NUMBER() OVER (PARTITION BY oc.attempt_id ORDER BY oc.revenue DESC, oc.id ASC) AS rn
         FROM ota.optimizer_candidates oc
@@ -62,10 +81,10 @@ view: price_drop_any_tag {
         WHERE oct.value = 'Price Only'
           AND {% condition price_drop_funnel.date_date %} oc.created_at {% endcondition %}
       )
-      SELECT d, gds, COUNT(*) AS n
+      SELECT d, gds, carrier, COUNT(*) AS n
       FROM tagged
       WHERE rn = 1
-      GROUP BY d, gds
+      GROUP BY d, gds, carrier
     ;;
   }
 
@@ -73,7 +92,7 @@ view: price_drop_any_tag {
     primary_key: yes
     hidden: yes
     type: string
-    sql: CONCAT(${TABLE}.d, '|', ${TABLE}.gds) ;;
+    sql: CONCAT(${TABLE}.d, '|', ${TABLE}.gds, '|', COALESCE(${TABLE}.carrier, '(none)')) ;;
   }
 
   # -------------------------
@@ -99,6 +118,14 @@ view: price_drop_any_tag {
     label: "Content Source"
     sql: ${TABLE}.gds ;;
     description: "Content source of the (arbitrary, highest-revenue) candidate picked to represent each attempt's Price & Drop tag -- any candidacy, no revenue floor. Used only for the Price & Drop funnel's top-of-funnel count; a different attempt-representative candidate than price_drop_candidates' own Admissible-only pick, so don't expect a 1:1 relationship with that view's rows -- combine their measures at the (date, gds) grain instead, matching ci_pricedrop_bot's own computePriceDropFunnel()."
+  }
+
+  dimension: carrier {
+    type: string
+    group_label: "2. CONTESTANT INFO"
+    label: "Validating Carrier"
+    sql: ${TABLE}.carrier ;;
+    description: "Validating carrier of the same (arbitrary, highest-revenue) candidate gds picks to represent each attempt's Price & Drop tag -- see gds's own description for that caveat. Safe to filter by directly (unlike price_drop_candidates.carrier, the joined view's own field, which would drop zero-Admissible content sources like 'abc' if used as an outer filter -- see the derived table's own comments). Added 2026-09-10; splitting the prior (date, gds) grain by carrier changes nothing about any existing measure's totals when this field isn't selected or filtered."
   }
 
   # -------------------------
