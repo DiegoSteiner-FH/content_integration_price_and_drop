@@ -14,13 +14,14 @@ view: price_drop_share_summary {
   # (admissible_by_gds + booked_without_admissible) and the same eligible_
   # delta / single_to_multi / LowRevenue / test-booking exclusions already
   # established in price_drop_share_rows and price_drop_candidates -- but
-  # the FINAL output is one row per (panel, content source): 'today' (each
-  # attempt's real booked_gds) and 'if_live' (the best profitable content
-  # source among whichever sources the live_sources filter below selects,
-  # falling back to the real booked_gds when none qualify). That's ~25-30
-  # rows per panel regardless of whether the underlying window covers
-  # thousands or hundreds of thousands of real bookings -- the aggregation
-  # happens once, in MySQL, never as raw rows in the browser.
+  # the FINAL output is one row per (panel, content source, carrier):
+  # 'today' (each attempt's real booked_gds) and 'if_live' (the best
+  # profitable content source among whichever sources the live_sources
+  # filter below selects, falling back to the real booked_gds when none
+  # qualify). That's still a small number of rows regardless of whether
+  # the underlying window covers thousands or hundreds of thousands of
+  # real bookings -- the aggregation happens once, in MySQL, never as raw
+  # rows in the browser.
   #
   # Trade-off, confirmed explicitly with the user: "which sources are
   # live" is now a real Looker filter (live_sources), not an instant
@@ -35,6 +36,27 @@ view: price_drop_share_summary {
   # Live side, e.g. gtsfly/travelcaster -- real Price & Drop-active
   # sources with too few actual bookings today to show up there, but with
   # real profitable candidates).
+  #
+  # carrier (2026-09-11, DS): added on request, same one-Validating-
+  # Carrier-per-ATTEMPT convention price_drop_share_rows already
+  # established (not per content source/panel) -- for the admissible-
+  # tagged population, the single best-revenue candidate's carrier across
+  # ALL content sources on that attempt (best_overall_carrier below, same
+  # value price_drop_candidates.carrier / price_drop_share_rows.carrier
+  # already use); for a booking with no admissible candidate at all, the
+  # real booked candidate's own carrier. Both the Today and If Live rows
+  # for one attempt share this same attempt-level carrier value -- this
+  # view was never meant to attribute a carrier to one specific content
+  # source, only to let you filter/break down the Share by the attempt's
+  # own carrier, same as every other tile. Purely additive: this widens
+  # the final grain from (panel, gds) to (panel, gds, carrier), which
+  # only changes results for a query that explicitly selects carrier --
+  # a query selecting just panel + gds (like the existing tile's own
+  # query) still gets the exact same counts, since Looker's own SUM
+  # re-aggregates across carrier when it isn't selected. No join is
+  # involved anywhere in this view (unlike price_drop_any_tag's carrier
+  # attempt, PR #44/#45), so there's no fan-out risk from widening the
+  # grain here.
   #
   # date_filter / live_sources are both filter-only fields with no
   # corresponding dimension -- this view's final output has no date or
@@ -61,8 +83,9 @@ view: price_drop_share_summary {
     sql:
       WITH admissible_by_gds AS (
         SELECT
-          oc.attempt_id, oc.gds, oc.revenue,
-          ROW_NUMBER() OVER (PARTITION BY oc.attempt_id, oc.gds ORDER BY oc.revenue DESC, oc.id ASC) AS rn
+          oc.attempt_id, oc.gds, oc.revenue, oc.validating_carrier,
+          ROW_NUMBER() OVER (PARTITION BY oc.attempt_id, oc.gds ORDER BY oc.revenue DESC, oc.id ASC) AS rn,
+          ROW_NUMBER() OVER (PARTITION BY oc.attempt_id ORDER BY oc.revenue DESC, oc.id ASC) AS rn_overall
         FROM ota.optimizer_candidates oc
         STRAIGHT_JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
         STRAIGHT_JOIN ota.optimizer_tags ot ON ot.id = oct.tag_id AND ot.name = 'Dropped'
@@ -83,6 +106,9 @@ view: price_drop_share_summary {
       ),
       admissible_attempts AS (
         SELECT DISTINCT attempt_id FROM best_per_gds
+      ),
+      best_overall_carrier AS (
+        SELECT attempt_id, validating_carrier FROM admissible_by_gds WHERE rn_overall = 1
       ),
       best_eligible_ranked AS (
         SELECT
@@ -133,7 +159,7 @@ view: price_drop_share_summary {
       ),
       booked_without_admissible AS (
         SELECT
-          oab.attempt_id, bc.gds AS booked_gds,
+          oab.attempt_id, bc.gds AS booked_gds, bc.validating_carrier AS carrier,
           ROW_NUMBER() OVER (PARTITION BY oab.attempt_id ORDER BY bc.revenue DESC, bc.id ASC) AS rn
         FROM ota.optimizer_attempt_bookings oab
         JOIN ota.optimizer_candidates bc ON bc.id = oab.candidate_id
@@ -148,30 +174,33 @@ view: price_drop_share_summary {
           )
       ),
       booked_without_admissible_best AS (
-        SELECT attempt_id, booked_gds FROM booked_without_admissible WHERE rn = 1
+        SELECT attempt_id, booked_gds, carrier FROM booked_without_admissible WHERE rn = 1
       ),
       base_attempts AS (
         SELECT
           aa.attempt_id,
           bab.booked_gds AS today_gds,
-          COALESCE(blp.gds, bab.booked_gds) AS if_live_gds
+          COALESCE(blp.gds, bab.booked_gds) AS if_live_gds,
+          boc.validating_carrier AS carrier
         FROM admissible_attempts aa
         LEFT JOIN booked_admissible_best bab ON bab.attempt_id = aa.attempt_id
         LEFT JOIN best_live_profitable blp ON blp.attempt_id = aa.attempt_id
+        LEFT JOIN best_overall_carrier boc ON boc.attempt_id = aa.attempt_id
         UNION ALL
         SELECT
           bwab.attempt_id,
           bwab.booked_gds AS today_gds,
-          bwab.booked_gds AS if_live_gds
+          bwab.booked_gds AS if_live_gds,
+          bwab.carrier
         FROM booked_without_admissible_best bwab
       )
-      SELECT 'today' AS panel, today_gds AS gds, COUNT(*) AS n
+      SELECT 'today' AS panel, today_gds AS gds, carrier, COUNT(*) AS n
       FROM base_attempts
-      GROUP BY today_gds
+      GROUP BY today_gds, carrier
       UNION ALL
-      SELECT 'if_live' AS panel, if_live_gds AS gds, COUNT(*) AS n
+      SELECT 'if_live' AS panel, if_live_gds AS gds, carrier, COUNT(*) AS n
       FROM base_attempts
-      GROUP BY if_live_gds
+      GROUP BY if_live_gds, carrier
     ;;
   }
 
@@ -179,7 +208,7 @@ view: price_drop_share_summary {
     primary_key: yes
     hidden: yes
     type: string
-    sql: CONCAT(${TABLE}.panel, '|', COALESCE(${TABLE}.gds, '(none)')) ;;
+    sql: CONCAT(${TABLE}.panel, '|', COALESCE(${TABLE}.gds, '(none)'), '|', COALESCE(${TABLE}.carrier, '(none)')) ;;
   }
 
   dimension: panel {
@@ -199,11 +228,19 @@ view: price_drop_share_summary {
     description: "The content source this row's count belongs to, within whichever panel (Today or If Live) this row represents. NULL becomes '(none)' upstream for an attempt that was never booked at all and also had no profitable candidate to fall back to."
   }
 
+  dimension: carrier {
+    type: string
+    group_label: "1. SHARE"
+    label: "Validating Carrier"
+    sql: ${TABLE}.carrier ;;
+    description: "One Validating Carrier per attempt (not per content source/panel) -- for the admissible-tagged population, the single best-revenue candidate's carrier across ALL content sources on that attempt (same value price_drop_candidates.carrier / price_drop_share_rows.carrier already use); for a booking with no admissible candidate at all, the real booked candidate's own carrier. Both the Today and If Live rows for one attempt share this same value. Adding this to a query widens the grain from (panel, gds) to (panel, gds, carrier) -- a query that leaves carrier unselected still gets the exact same Bookings counts as before, since Looker's own SUM re-aggregates across carrier when it isn't in the query."
+  }
+
   measure: count {
     type: sum
     sql: ${TABLE}.n ;;
     group_label: "2. COUNTS"
     label: "Bookings"
-    description: "Count of real attempts assigned to this (panel, content source) combination. Sum across every content source within one panel to get that panel's total 'Bookings in scope' -- both panels always sum to the identical total, since they share the same denominator."
+    description: "Count of real attempts assigned to this (panel, content source[, carrier]) combination. Sum across every content source within one panel to get that panel's total 'Bookings in scope' -- both panels always sum to the identical total, since they share the same denominator."
   }
 }
