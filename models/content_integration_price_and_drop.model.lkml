@@ -58,10 +58,20 @@ explore: price_drop_price_rate {
 explore: price_drop_share {
   from: price_drop_share_rows
   label: "CI Price Drop Bot - Content Source Share"
-  description: "Today (actual bookings) vs. If Live: every real booking in the window (tagged or not) keeps its actual content source unless a chosen set of Price & Drop sources had a candidate beating the best real Eligible alternative on that attempt, in which case the best such source wins the row instead. Full parity with ci_pricedrop_bot's own Content Source Share section on population (every real booking counts, not just tag-anchored ones, unlike every other explore here); one deliberate divergence on what counts as a 'win' -- beats best Eligible (this project's own Profitable definition), not raw revenue > 0. See price_drop_share_rows.view.lkml for the full reasoning. Note: `from:` aliases price_drop_share_rows's fields to this explore's own name (price_drop_share.*) everywhere within this explore -- matches the {% condition price_drop_share.date_date %} tags already inside that view's derived table and the custom visualization's own required field names."
+  description: "Today (actual bookings) vs. If Live: every real booking in the window (tagged or not) keeps its actual content source unless a chosen set of Price & Drop sources had a candidate beating the best real Eligible alternative on that attempt, in which case the best such source wins the row instead. Full parity with ci_pricedrop_bot's own Content Source Share section on population (every real booking counts, not just tag-anchored ones, unlike every other explore here); one deliberate divergence on what counts as a 'win' -- beats best Eligible (this project's own Profitable definition), not raw revenue > 0. See price_drop_share_rows.view.lkml for the full reasoning. Note: `from:` aliases price_drop_share_rows's fields to this explore's own name (price_drop_share.*) everywhere within this explore -- matches the {% condition price_drop_share.date_date %} tags already inside that view's derived table and the custom visualization's own required field names. Row-level design: instant client-side 'If Live' toggling, but capped by Looker's ~5,000-row interactive query limit at real volume -- see price_drop_share_summary for the SQL-aggregated sibling with no row cap (trades the instant toggle for a real live_sources filter)."
   persist_with: price_drop_candidates_default_datagroup
 
   always_filter: {
     filters: [price_drop_share.date_date: "7 days"]
+  }
+}
+
+explore: price_drop_share_summary {
+  label: "CI Price Drop Bot - Content Source Share (Summary)"
+  description: "SQL-aggregated sibling of price_drop_share: same Today-vs-If-Live comparison and the same eligible_delta / single_to_multi / LowRevenue / test-booking exclusions, but the ENTIRE computation runs inside the derived table's own SQL, returning one row per (panel, content source) -- no per-attempt row ever leaves MySQL. Built 2026-09-11 specifically to get past Looker's ~5,000-row interactive query cap, which price_drop_share's own row-level design hits at real volume (confirmed: ~9,000 real attempts/day). Trade-off: 'which sources are live' is the live_sources filter here, a real Looker filter that re-runs the query when changed, not an instant client-side toggle like price_drop_share's picker. Fully separate view/explore/visualization from price_drop_share -- that explore, price_drop_share_rows, and content_source_share.js are untouched, so this can be dropped entirely with no side effects if it doesn't work out."
+  persist_with: price_drop_candidates_default_datagroup
+
+  always_filter: {
+    filters: [price_drop_share_summary.date_filter: "7 days"]
   }
 }
