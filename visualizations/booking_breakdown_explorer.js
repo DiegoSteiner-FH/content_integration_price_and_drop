@@ -17,6 +17,16 @@
 // Revenue / summed Booking Count (never an average of per-row averages),
 // matching booking_avg_revenue's own LookML definition.
 //
+// Why (2026-09-14, DS), switched from booking_extra_rev_best_only to
+// booking_extra_rev_vs_booked: the "Best Only" measure always compares a
+// candidate's revenue against the theoretical best Eligible candidate's
+// revenue, regardless of which candidate actually got booked or whether
+// that specific one succeeded. booking_extra_rev_vs_booked compares
+// against what was ACTUALLY booked on the attempt instead -- the more
+// meaningful number for a tile framed around real bookings, since the two
+// diverge whenever the best-on-paper Eligible candidate wasn't the one
+// that ended up booked and issued (verified: PR #54).
+//
 // Required fields, in this exact query (from the price_drop_candidates
 // explore, grouped by all 6 dims below -- do NOT add Created Date as an
 // output column, only as a filter, or every tab will double-count across
@@ -30,7 +40,7 @@
 //   price_drop_candidates.admissible_candidates_count
 //   price_drop_candidates.booking_count
 //   price_drop_candidates.booking_total_revenue
-//   price_drop_candidates.booking_extra_rev_best_only
+//   price_drop_candidates.booking_extra_rev_vs_booked
 //
 // Booking Avg Revenue is optional in the query (ignored if present --
 // this viz always recomputes it itself, see above).
@@ -50,10 +60,10 @@
   var ADMISSIBLE_FIELD = VIEW + ".admissible_candidates_count";
   var BOOKING_COUNT_FIELD = VIEW + ".booking_count";
   var BOOKING_REVENUE_FIELD = VIEW + ".booking_total_revenue";
-  var BOOKING_EXTRA_BEST_FIELD = VIEW + ".booking_extra_rev_best_only";
+  var BOOKING_EXTRA_VS_BOOKED_FIELD = VIEW + ".booking_extra_rev_vs_booked";
 
   var REQUIRED_FIELDS = TABS.map(function (t) { return t.field; })
-    .concat([ADMISSIBLE_FIELD, BOOKING_COUNT_FIELD, BOOKING_REVENUE_FIELD, BOOKING_EXTRA_BEST_FIELD]);
+    .concat([ADMISSIBLE_FIELD, BOOKING_COUNT_FIELD, BOOKING_REVENUE_FIELD, BOOKING_EXTRA_VS_BOOKED_FIELD]);
 
   var CSS = "\
     .pd-bbe { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size: 15px; color: #111827; height: 100%; overflow: auto; }\
@@ -68,7 +78,7 @@
     table.pd-bbe-table col.pd-bbe-col-bookingCount { width: 15%; }\
     table.pd-bbe-table col.pd-bbe-col-bookingRevenue { width: 17%; }\
     table.pd-bbe-table col.pd-bbe-col-bookingAvgRevenue { width: 15%; }\
-    table.pd-bbe-table col.pd-bbe-col-bookingExtraBestOnly { width: 22%; }\
+    table.pd-bbe-table col.pd-bbe-col-bookingExtraVsBooked { width: 22%; }\
     table.pd-bbe-table th { text-align: left; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #9ca3af; padding: 10px 12px; cursor: pointer; white-space: normal; line-height: 1.35; vertical-align: bottom; border-bottom: 1px solid #e5e7eb; position: sticky; top: 0; background: #fff; z-index: 2; }\
     table.pd-bbe-table th:hover { color: #111827; }\
     table.pd-bbe-table th.num, table.pd-bbe-table td.num { text-align: right; }\
@@ -124,14 +134,14 @@
     rows.forEach(function (row) {
       var key = strVal(row[fieldName]);
       if (!groups[key]) {
-        groups[key] = { key: key, admissibleCount: 0, bookingCount: 0, bookingRevenue: 0, bookingExtraBestOnly: 0 };
+        groups[key] = { key: key, admissibleCount: 0, bookingCount: 0, bookingRevenue: 0, bookingExtraVsBooked: 0 };
         order.push(key);
       }
       var g = groups[key];
       g.admissibleCount += numVal(row[ADMISSIBLE_FIELD]);
       g.bookingCount += numVal(row[BOOKING_COUNT_FIELD]);
       g.bookingRevenue += numVal(row[BOOKING_REVENUE_FIELD]);
-      g.bookingExtraBestOnly += numVal(row[BOOKING_EXTRA_BEST_FIELD]);
+      g.bookingExtraVsBooked += numVal(row[BOOKING_EXTRA_VS_BOOKED_FIELD]);
     });
     return order.map(function (key) {
       var g = groups[key];
@@ -143,12 +153,12 @@
   // Grand total row -- Booking Avg Revenue recomputed from the totals,
   // same rule as aggregateBy.
   function computeTotals(grouped) {
-    var t = { admissibleCount: 0, bookingCount: 0, bookingRevenue: 0, bookingExtraBestOnly: 0 };
+    var t = { admissibleCount: 0, bookingCount: 0, bookingRevenue: 0, bookingExtraVsBooked: 0 };
     grouped.forEach(function (g) {
       t.admissibleCount += g.admissibleCount;
       t.bookingCount += g.bookingCount;
       t.bookingRevenue += g.bookingRevenue;
-      t.bookingExtraBestOnly += g.bookingExtraBestOnly;
+      t.bookingExtraVsBooked += g.bookingExtraVsBooked;
     });
     t.bookingAvgRevenue = t.bookingCount ? t.bookingRevenue / t.bookingCount : 0;
     return t;
@@ -160,7 +170,7 @@
     { key: "bookingCount", label: "Booking Count", num: true },
     { key: "bookingRevenue", label: "Booking Total Revenue", num: true, fmt: money },
     { key: "bookingAvgRevenue", label: "Booking Avg Revenue", num: true, fmt: money },
-    { key: "bookingExtraBestOnly", label: "Booking Extra Rev. (Best Only)", num: true, fmt: moneySigned, signed: true }
+    { key: "bookingExtraVsBooked", label: "Booking Extra Rev. (vs. Booked)", num: true, fmt: moneySigned, signed: true }
   ];
 
   looker.plugins.visualizations.add({
