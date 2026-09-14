@@ -19,7 +19,7 @@ explore: price_drop_candidates {
 explore: price_drop_funnel {
   from: price_drop_any_tag
   label: "CI Price Drop Bot - Funnel"
-  description: "Price & Drop funnel: every content source with Price & Drop tag activity (price_drop_any_tag, the base view here) left-joined to its Admissible candidates (price_drop_candidates), if any. Driving the explore from price_drop_any_tag instead of price_drop_candidates is deliberate -- price_drop_any_tag's (date, gds) coverage is always a superset (an Admissible candidate is itself Price Only-tagged), so a content source with zero Admissible candidates that day (e.g. 'abc') still shows up correctly with zeros instead of disappearing, using plain left_outer (this connection's MySQL dialect does not support full_outer). Note: `from:` aliases price_drop_any_tag's fields to this explore's own name (price_drop_funnel.*) everywhere within this explore -- not price_drop_any_tag.* -- see always_filter and the join below. IMPORTANT: always_filter here must ONLY ever reference price_drop_funnel.* (the base view), never price_drop_candidates.* -- an outer WHERE-level filter on the joined 'many' side goes NULL for any row where price_drop_candidates has no match (like abc), and NULL BETWEEN x AND y silently drops that entire row, undoing this explore's whole purpose. price_drop_candidates' own date bound lives inside its derived table instead (a safety cap, see that view file) -- it doesn't touch the outer WHERE clause, so it can't break this."
+  description: "Price & Drop funnel: every content source with Price & Drop tag activity (price_drop_any_tag, the base view here) left-joined to its Admissible candidates (price_drop_candidates) and its booking-scoped Attempts w/ Price & Drop count (price_drop_any_tag_bookings), if any. Driving the explore from price_drop_any_tag instead of price_drop_candidates is deliberate -- price_drop_any_tag's (date, gds) coverage is always a superset (an Admissible candidate is itself Price Only-tagged), so a content source with zero Admissible candidates that day (e.g. 'abc') still shows up correctly with zeros instead of disappearing, using plain left_outer (this connection's MySQL dialect does not support full_outer). Note: `from:` aliases price_drop_any_tag's fields to this explore's own name (price_drop_funnel.*) everywhere within this explore -- not price_drop_any_tag.* -- see always_filter and the joins below. IMPORTANT: always_filter here must ONLY ever reference price_drop_funnel.* (the base view), never price_drop_candidates.* or price_drop_any_tag_bookings.* -- an outer WHERE-level filter on either joined 'many'/'one' side goes NULL for any row where that view has no match (like abc), and NULL BETWEEN x AND y silently drops that entire row, undoing this explore's whole purpose. Both joined views' own date bounds live inside their own derived tables instead (a safety cap / {% condition %} on price_drop_funnel.date_date) -- neither touches the outer WHERE clause, so neither can break this.\"
   persist_with: price_drop_candidates_default_datagroup
 
   always_filter: {
@@ -32,6 +32,14 @@ explore: price_drop_funnel {
     relationship: one_to_many
     sql_on: ${price_drop_funnel.date_date} = ${price_drop_candidates.date_date}
         AND ${price_drop_funnel.gds} = ${price_drop_candidates.gds} ;;
+  }
+
+  join: price_drop_any_tag_bookings {
+    view_label: "Price & Drop Funnel"
+    type: left_outer
+    relationship: one_to_one
+    sql_on: ${price_drop_funnel.date_date} = ${price_drop_any_tag_bookings.date_date}
+        AND ${price_drop_funnel.gds} = ${price_drop_any_tag_bookings.gds} ;;
   }
 }
 
