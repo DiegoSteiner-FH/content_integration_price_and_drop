@@ -5,6 +5,12 @@ visualization: {
 }
 
 visualization: {
+  id: "price_drop_booking_breakdown_explorer"
+  label: "Price Drop Booking Breakdown Explorer"
+  file: "visualizations/booking_breakdown_explorer.js"
+}
+
+visualization: {
   id: "price_drop_price_rate_table"
   label: "Price Drop Price Rate Table"
   file: "visualizations/price_rate_table.js"
