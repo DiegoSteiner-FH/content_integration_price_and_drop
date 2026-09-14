@@ -29,6 +29,12 @@ visualization: {
 }
 
 visualization: {
+  id: "price_drop_booking_funnel_table"
+  label: "Price Drop Booking Funnel Table"
+  file: "visualizations/booking_funnel_table.js"
+}
+
+visualization: {
   id: "price_drop_content_source_share"
   label: "Price Drop Content Source Share"
   file: "visualizations/content_source_share.js"
