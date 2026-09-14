@@ -79,13 +79,42 @@ view: price_drop_any_tag {
   # 2026-09-08: 91,614 -> 91,189 tagged candidates -- 91,189 is the exact
   # total already established for Candidacy Breakdown/Price Rate that same
   # day, confirming this brings the three populations into alignment.
+  #
+  # Why (2026-09-14, DS), dedup changed from PARTITION BY attempt_id to
+  # PARTITION BY (attempt_id, gds) -- real definition bug, not a style
+  # choice. The old ranking picked ONE representative candidate per
+  # attempt across ALL content sources (highest revenue wins), so an
+  # attempt could only ever be credited to a single gds in this count --
+  # if content source A's tagged candidate on an attempt had lower revenue
+  # than content source B's tagged candidate on that SAME attempt, A's
+  # count silently lost that attempt entirely, even though A genuinely had
+  # a Dropped='Price Only' candidate on it. Caught by comparing this view's
+  # 'abc' counts (652-1,167/day) against Candidacy Breakdown's own
+  # per-candidate 'abc' counts for the same window (10,271-13,432/day) --
+  # too large a gap to be explained by the already-known contestant-vs-
+  # attempt dedup difference alone. Explicitly requested: "Attempts w/
+  # Price & Drop" should count every attempt where THIS gds had at least
+  # one tagged candidate, full stop -- no cross-gds competition, since
+  # picking a "winner" is what the Admissible / Profitable (vs. best
+  # Eligible) measures already do downstream. Now partitions the ROW_NUMBER
+  # by (attempt_id, gds) instead -- still collapses duplicate tagged
+  # candidates from the SAME content source on the SAME attempt (e.g.
+  # multi-currency/fare variants), but no longer fights across content
+  # sources, so the same attempt can correctly appear under every content
+  # source that had a tagged candidate on it. Verified 2026-09-08 to
+  # 2026-09-14, gds='abc': 652/1,167/1,043/456/32/49/11 (old, wrong) ->
+  # 5,166/6,884/6,635/5,818/5,169/5,516/1,001 (new), matching a direct
+  # COUNT(DISTINCT attempt_id) per gds computed independently. Does NOT
+  # change this view's (date, gds) output grain or primary key -- only
+  # which candidate rows survive the dedup -- so this cannot reopen the
+  # join fan-out class of bug from PR #44/#45.
   derived_table: {
     sql:
       WITH tagged AS (
         SELECT
           oc.id AS candidate_id, oc.attempt_id, oc.gds,
           DATE(oc.created_at) AS d,
-          ROW_NUMBER() OVER (PARTITION BY oc.attempt_id ORDER BY oc.revenue DESC, oc.id ASC) AS rn
+          ROW_NUMBER() OVER (PARTITION BY oc.attempt_id, oc.gds ORDER BY oc.revenue DESC, oc.id ASC) AS rn
         FROM ota.optimizer_candidates oc
         JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
          AND {% condition price_drop_funnel.date_date %} oct.created_at {% endcondition %}
@@ -135,7 +164,7 @@ view: price_drop_any_tag {
     group_label: "2. CONTESTANT INFO"
     label: "Content Source"
     sql: ${TABLE}.gds ;;
-    description: "Content source of the (arbitrary, highest-revenue) candidate picked to represent each attempt's Price & Drop tag -- any candidacy, no revenue floor. Used only for the Price & Drop funnel's top-of-funnel count; a different attempt-representative candidate than price_drop_candidates' own Admissible-only pick, so don't expect a 1:1 relationship with that view's rows -- combine their measures at the (date, gds) grain instead, matching ci_pricedrop_bot's own computePriceDropFunnel()."
+    description: "Content source of the tagged candidate(s) this row summarizes. Redefined 2026-09-14: dedup is now per (attempt, gds), not a single cross-gds winner per attempt -- an attempt with tagged candidates from multiple content sources is counted under EVERY one of them here, not just whichever had the highest revenue. A different attempt population than price_drop_candidates' own Admissible-only pick either way, so don't expect a 1:1 relationship with that view's rows -- combine their measures at the (date, gds) grain instead, matching ci_pricedrop_bot's own computePriceDropFunnel()."
   }
 
   # -------------------------
@@ -147,6 +176,6 @@ view: price_drop_any_tag {
     sql: ${TABLE}.n ;;
     group_label: "3. COUNTS"
     label: "Attempts w/ Price & Drop"
-    description: "Count of distinct attempts with a Dropped='Price Only' tag on any candidate, regardless of candidacy or revenue -- the Price & Drop funnel's top-of-funnel denominator. Matches ci_pricedrop_bot's any_pricedrop_tag_count exactly (verified 2026-09-09 against 2026-09-08, gds='aerohub': 2,670)."
+    description: "Count of distinct attempts where THIS content source has a Dropped='Price Only' tagged candidate, regardless of that candidate's own candidacy or revenue, and regardless of whether another content source also had a tagged candidate (and a higher one) on the same attempt -- the Price & Drop funnel's top-of-funnel denominator per content source. Redefined 2026-09-14: previously picked one cross-gds 'winner' per attempt (highest revenue across ALL tagged candidates, regardless of gds), which silently dropped an attempt from a content source's count whenever a different source's tagged candidate had higher revenue on that same attempt -- fixed by deduping per (attempt, gds) instead of per attempt alone, so the same attempt can now correctly count toward every content source that had a tagged candidate on it. Picking a single 'winner' is intentionally left to the Admissible / Profitable (vs. best Eligible) measures downstream, not this one."
   }
 }
