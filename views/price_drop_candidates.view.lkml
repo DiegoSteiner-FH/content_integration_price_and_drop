@@ -350,7 +350,7 @@ view: price_drop_candidates {
     group_label: "4. MONETARY"
     label: "Extra Revenue (vs. Booked/Eligible)"
     sql: ${revenue} - COALESCE(${booked_revenue_on_attempt}, ${best_eligible_revenue_on_attempt}, 0) ;;
-    description: "This row's revenue minus whatever was actually booked on the attempt, or the best non-LowRevenue Eligible candidate if nothing was booked, or 0 if neither exists. Mirrors ci_pricedrop_bot's compute_comparison() baseline chain (booked -> best Eligible -> $0). Independent of near_miss_bucket/eligible_delta below -- this one prioritizes what was actually booked. No longer backs any measure (extra_revenue_sum was removed 2026-09-09 as a near-duplicate of extra_revenue_best_only_sum once Profitable was redefined) -- stays public for standalone per-row analysis."
+    description: "This row's revenue minus whatever was actually booked on the attempt, or the best non-LowRevenue Eligible candidate if nothing was booked, or 0 if neither exists. Mirrors ci_pricedrop_bot's compute_comparison() baseline chain (booked -> best Eligible -> $0). Independent of near_miss_bucket/eligible_delta below -- this one prioritizes what was actually booked. Backs booking_extra_rev_vs_booked below (added 2026-09-14) -- when gated on is_real_booking, booked_revenue_on_attempt is always populated for the rows that measure counts, so the best-Eligible/$0 fallback never actually triggers in that context; the fallback still matters for standalone per-row analysis of this dimension on its own."
   }
 
   # Why (2026-09-09, DS): now falls back to $0 when no Eligible candidate
@@ -459,7 +459,33 @@ view: price_drop_candidates {
     value_format: "$#,##0.00"
     group_label: "6. REVENUE"
     label: "Booking Extra Rev. (Best Only)"
-    description: "Sum of eligible_delta across the same population booking_count counts -- Profitable candidates whose attempt has a real, issued, non-test booking. Same relationship to extra_revenue_best_only_sum that booking_count has to profitable_candidates_count."
+    description: "Sum of eligible_delta across the same population booking_count counts -- Profitable candidates whose attempt has a real, issued, non-test booking. Same relationship to extra_revenue_best_only_sum that booking_count has to profitable_candidates_count. Compares against the theoretical best Eligible candidate's revenue regardless of what actually got booked -- see booking_extra_rev_vs_booked below for the same idea compared against what was actually booked instead."
+  }
+
+  # Why (2026-09-14, DS): added after asking "if the best Eligible
+  # candidate's own booking failed and a different candidate got booked
+  # and issued instead, which revenue are we comparing to?" --
+  # booking_extra_rev_best_only above always compares against best_
+  # eligible_revenue_on_attempt (the theoretically best Eligible candidate
+  # by revenue), regardless of which candidate actually got booked or
+  # whether that specific one succeeded. This measure compares against
+  # what was ACTUALLY booked instead, using extra_revenue's booked-first
+  # chain (previously unused by any measure). Gated on is_real_booking, so
+  # booked_revenue_on_attempt is always populated for the rows counted
+  # here -- the fallback to best Eligible inside extra_revenue never
+  # actually triggers in this context. Diverges from booking_extra_rev_
+  # best_only whenever the best Eligible candidate wasn't the one that
+  # ended up booked (e.g. it failed and a worse-on-paper candidate was
+  # booked and issued instead) -- verified 2026-09-14: 7,673 candidates /
+  # $192,531.30 (vs. booked) vs. 7,482 candidates / $188,100.44 (vs. best
+  # Eligible) for the same 2026-09-08 to 2026-09-14 window.
+  measure: booking_extra_rev_vs_booked {
+    type: sum
+    sql: CASE WHEN ${extra_revenue} > 0 AND ${is_real_booking} THEN ${extra_revenue} END ;;
+    value_format: "$#,##0.00"
+    group_label: "6. REVENUE"
+    label: "Booking Extra Rev. (vs. Booked)"
+    description: "Sum of extra_revenue (this candidate's revenue minus whatever was actually booked on the attempt) across candidates that beat what was actually booked AND whose attempt has a real, issued, non-test booking. Different population than booking_extra_rev_best_only -- that one compares against the theoretical best Eligible candidate's revenue regardless of what got booked or whether it succeeded; this one compares against the real booked candidate's own revenue instead. The two can diverge whenever the best Eligible candidate itself wasn't the one that ended up booked."
   }
 
   measure: average_revenue {
