@@ -409,6 +409,23 @@ view: price_drop_candidates {
     description: "This candidate's revenue minus the best non-LowRevenue Eligible candidate's revenue on the same attempt, falling back to $0 when no Eligible candidate exists on the attempt at all. NEVER considers what was actually booked, unlike extra_revenue above -- a genuinely different comparison. Drives near_miss_bucket (and therefore profitable_candidates_count / revenue_sum / average_revenue / near_miss_count) and extra_revenue_best_only_sum below. Unhidden 2026-09-09 for the Attempt Examples tile -- its per-row 'Delta' column, the same figure extra_revenue_best_only_sum sums across Profitable candidates."
   }
 
+  # Why (2026-09-14, DS): added so the requester can filter the Explore
+  # directly on this field (e.g. "is greater than or equal to" 100) to see
+  # only candidates where repricing added at least that much revenue over
+  # the un-repriced baseline -- no separate custom filter/measure needed,
+  # a plain numeric dimension filter in Looker's own Explore UI does this.
+  # Same $0 fallback convention as eligible_delta above, for the rare
+  # attempt with no 'original' row at all (see original_candidate_revenue_
+  # on_attempt's own description -- ~100% populated in practice).
+  dimension: original_delta {
+    type: number
+    value_format: "$#,##0.00"
+    group_label: "4. MONETARY"
+    label: "Delta (vs. Original)"
+    sql: ${revenue} - COALESCE(${original_candidate_revenue_on_attempt}, 0) ;;
+    description: "This candidate's revenue minus its attempt's own pre-repricing Original Candidate Revenue (see that dimension -- the reprice_type='original' sibling row on the same attempt_id, not gated by candidacy), falling back to $0 when no such row exists on the attempt at all. Filter this field directly in the Explore (e.g. 'is greater than or equal to' 100) to isolate candidates where repricing added at least that much revenue over the un-repriced baseline. Independent of eligible_delta and near_miss_bucket above -- a genuinely different comparison (vs. the un-repriced original fare, not vs. the best Eligible alternative)."
+  }
+
   # -------------------------
   # 5. COUNTS
   # -------------------------
