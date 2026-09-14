@@ -85,6 +85,23 @@ view: price_drop_candidates {
   # 11,925 -> booking_count 7,418; revenue_sum $436,260.81 -> booking_total_
   # revenue $296,552.84; extra_revenue_best_only_sum $292,065.05 ->
   # booking_extra_rev_best_only $186,655.68.
+  #
+  # Why (2026-09-14, DS), original_candidate_revenue_on_attempt added:
+  # requested to see the pre-repricing baseline fare for comparison.
+  # ota.optimizer_candidates has no parent_id-based "original" concept --
+  # that column links a single_to_multi override child back to its own
+  # anchor candidate only (already used above for best_eligible_ranked's
+  # exclusion), a different relationship. The real "original" concept is a
+  # SIBLING row on the same attempt_id with reprice_type='original' --
+  # confirmed against genesis's own OptimizerAttemptSummary::compute(),
+  # which finds an attempt's own "original" candidate the same way
+  # ($candidates->whereRepriceType(REPRICE_TYPE_ORIGINAL)->first()), not
+  # via parent_id. Verified 2026-09-08: 3,797 of 3,798 Admissible
+  # candidates (~100%) have exactly one such sibling row (a defensive
+  # ROW_NUMBER dedup is still applied, matching every other CTE here, in
+  # case more than one ever exists). Not gated by candidacy, LowRevenue, or
+  # single_to_multi -- it's simply whatever the un-repriced fare was,
+  # independent of any Eligible/Admissible classification.
   derived_table: {
     sql:
       WITH admissible AS (
@@ -145,6 +162,16 @@ view: price_drop_candidates {
         FROM ota.optimizer_attempt_bookings oab
         JOIN ota.bookings rb ON rb.id = oab.booking_id
         WHERE rb.status = 'issued' AND rb.is_test = 0
+      ),
+      original_ranked AS (
+        SELECT oc3.attempt_id, oc3.revenue AS original_revenue,
+          ROW_NUMBER() OVER (PARTITION BY oc3.attempt_id ORDER BY oc3.revenue DESC, oc3.id ASC) AS rn
+        FROM ota.optimizer_candidates oc3
+        WHERE oc3.attempt_id IN (SELECT attempt_id FROM best_per_attempt)
+          AND oc3.reprice_type = 'original'
+      ),
+      original AS (
+        SELECT attempt_id, original_revenue FROM original_ranked WHERE rn = 1
       )
       SELECT
         b.id,
@@ -159,12 +186,14 @@ view: price_drop_candidates {
         b.created_at,
         bk.booked_revenue,
         be.best_eligible_revenue,
-        CASE WHEN rbk.attempt_id IS NOT NULL THEN 1 ELSE 0 END AS is_real_booking
+        CASE WHEN rbk.attempt_id IS NOT NULL THEN 1 ELSE 0 END AS is_real_booking,
+        org.original_revenue
       FROM best_per_attempt b
       JOIN ota.optimizer_attempts oa ON oa.id = b.attempt_id
       LEFT JOIN booked bk ON bk.attempt_id = b.attempt_id
       LEFT JOIN best_eligible be ON be.attempt_id = b.attempt_id
       LEFT JOIN real_booking rbk ON rbk.attempt_id = b.attempt_id
+      LEFT JOIN original org ON org.attempt_id = b.attempt_id
     ;;
   }
 
@@ -326,6 +355,15 @@ view: price_drop_candidates {
     group_label: "4. MONETARY"
     sql: ${TABLE}.revenue ;;
     description: "Simulated Price & Drop revenue of this candidate."
+  }
+
+  dimension: original_candidate_revenue_on_attempt {
+    type: number
+    value_format: "$#,##0.00"
+    group_label: "4. MONETARY"
+    label: "Original Candidate Revenue"
+    sql: ${TABLE}.original_revenue ;;
+    description: "Revenue of this attempt's own pre-repricing baseline candidate -- the sibling ota.optimizer_candidates row on the same attempt_id with reprice_type='original' (genesis's own concept for the un-repriced fare, see Optimizer\\OptimizerAttemptSummary::whereRepriceType(REPRICE_TYPE_ORIGINAL)->first() -- NOT the parent_id relationship best_eligible_revenue_on_attempt's single_to_multi exclusion uses, which is a different, override-specific link). Not gated by candidacy, LowRevenue, or single_to_multi -- simply whatever the un-repriced fare was. Present for ~100% of Admissible candidates (verified 2026-09-08: 3,797 of 3,798); NULL on the rare attempt with no such row at all."
   }
 
   dimension: booked_revenue_on_attempt {
