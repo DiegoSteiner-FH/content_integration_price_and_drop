@@ -187,7 +187,11 @@ view: price_drop_candidates {
         bk.booked_revenue,
         be.best_eligible_revenue,
         CASE WHEN rbk.attempt_id IS NOT NULL THEN 1 ELSE 0 END AS is_real_booking,
-        org.original_revenue
+        org.original_revenue,
+        COALESCE(JSON_EXTRACT(oa.package, '$.passengers.adt'), 0)
+          + COALESCE(JSON_EXTRACT(oa.package, '$.passengers.chd'), 0)
+          + COALESCE(JSON_EXTRACT(oa.package, '$.passengers.ins'), 0)
+          + COALESCE(JSON_EXTRACT(oa.package, '$.passengers.inl'), 0) AS total_passengers
       FROM best_per_attempt b
       JOIN ota.optimizer_attempts oa ON oa.id = b.attempt_id
       LEFT JOIN booked bk ON bk.attempt_id = b.attempt_id
@@ -280,6 +284,37 @@ view: price_drop_candidates {
     label: "Affiliate ID"
     sql: ${TABLE}.affiliate_id ;;
     description: "Affiliate the search attempt belongs to. Fixed 2026-09-08: sourced from ota.optimizer_attempts (joined via attempt_id) inside the derived table — that column does not exist on ota.optimizer_candidates at all, and the prior version of this field would have errored the moment anyone queried it."
+  }
+
+  # Why (2026-09-14, DS): added after a real office enable/disable decision
+  # traced a forecast gap (simulation said ~80-104 bookings/day, real
+  # enablement only produced ~15-20/day) to a scope mismatch -- the office
+  # was enabled live for MULTI-PASSENGER itineraries only, but the
+  # forecast query never restricted to that scope. There is no plain
+  # passenger-count column on ota.optimizer_attempts or ota.
+  # optimizer_candidates -- it lives inside optimizer_attempts.package
+  # (JSON), under $.passengers, keyed by type (adt/chd/ins/inl). One value
+  # per ATTEMPT (not per candidate) -- every candidate under the same
+  # attempt_id shares its parent attempt's single passenger count.
+  # Verified 2026-09-08 to 2026-09-04, gds_account_id='YWGC42440': applying
+  # total_passengers > 1 to the same forecast population brought
+  # 80-106/day down to 15-21/day, matching the real post-enablement result
+  # almost exactly -- confirming this, not a pricing or timing issue, was
+  # the actual gap.
+  dimension: total_passengers {
+    type: number
+    group_label: "2. CONTESTANT INFO"
+    label: "Total Passengers"
+    sql: ${TABLE}.total_passengers ;;
+    description: "Total passenger count (adults + children + infants) on this candidate's search attempt, read from ota.optimizer_attempts.package (JSON, $.passengers.adt/.chd/.ins/.inl -- missing keys treated as 0). One value per attempt_id, not per candidate -- every candidate on the same attempt shares this same figure."
+  }
+
+  dimension: is_multi_pax {
+    type: yesno
+    group_label: "2. CONTESTANT INFO"
+    label: "Multi-Pax (2+ Passengers)"
+    sql: ${total_passengers} > 1 ;;
+    description: "Whether this candidate's search attempt has more than one passenger (adults + children + infants combined). Added specifically to let a tile or filter match a real-world enablement scope restricted to multi-passenger itineraries only, rather than assuming every simulated Admissible candidate is eligible to actually book once a content source goes live."
   }
 
   # -------------------------
