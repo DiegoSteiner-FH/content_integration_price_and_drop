@@ -3,8 +3,8 @@
 // Why (2026-09-14, DS): sibling of price_drop_funnel_table.js, built on the
 // same "CI Price Drop Bot - Funnel" explore, adding the booking-scoped
 // columns from PR #50/#51 (Attempts w/ Price & Drop (Real Bookings),
-// Admissible Candidates Count, Booking Count, Booking Extra Rev. (Best
-// Only)) alongside the original top-of-funnel Attempts w/ Price & Drop
+// Admissible Candidates Count, Booking Count, Booking Extra Rev. (vs.
+// Booked)) alongside the original top-of-funnel Attempts w/ Price & Drop
 // count. Same query shape as the original funnel table -- price_drop_
 // any_tag, price_drop_candidates, and price_drop_any_tag_bookings are all
 // joined in the explore at the (date, gds) grain already, so each result
@@ -25,6 +25,16 @@
 // measures sitting alongside their opportunity-scoped counterparts rather
 // than replacing them.
 //
+// Why (2026-09-14, DS), switched from booking_extra_rev_best_only to
+// booking_extra_rev_vs_booked: the "Best Only" measure always compares a
+// candidate's revenue against the theoretical best Eligible candidate's
+// revenue, regardless of which candidate actually got booked or whether
+// that specific one succeeded. booking_extra_rev_vs_booked compares
+// against what was ACTUALLY booked on the attempt instead -- the more
+// meaningful number for a tile framed around real bookings, since the two
+// diverge whenever the best-on-paper Eligible candidate wasn't the one
+// that ended up booked and issued (verified: PR #54).
+//
 // Required fields, in this exact query (flat, no pivot), from the
 // "CI Price Drop Bot - Funnel" explore:
 //   price_drop_funnel.date_date
@@ -33,7 +43,7 @@
 //   price_drop_any_tag_bookings.attempts_with_price_drop_booking_count
 //   price_drop_candidates.admissible_candidates_count
 //   price_drop_candidates.booking_count
-//   price_drop_candidates.booking_extra_rev_best_only
+//   price_drop_candidates.booking_extra_rev_vs_booked
 
 (function () {
   var DATE_FIELD = "price_drop_funnel.date_date";
@@ -42,9 +52,9 @@
   var REAL_BOOKING_ANY_TAG_FIELD = "price_drop_any_tag_bookings.attempts_with_price_drop_booking_count";
   var ADMISSIBLE_FIELD = "price_drop_candidates.admissible_candidates_count";
   var BOOKING_COUNT_FIELD = "price_drop_candidates.booking_count";
-  var BOOKING_EXTRA_BEST_FIELD = "price_drop_candidates.booking_extra_rev_best_only";
+  var BOOKING_EXTRA_VS_BOOKED_FIELD = "price_drop_candidates.booking_extra_rev_vs_booked";
 
-  var REQUIRED_FIELDS = [DATE_FIELD, GDS_FIELD, ANY_TAG_FIELD, REAL_BOOKING_ANY_TAG_FIELD, ADMISSIBLE_FIELD, BOOKING_COUNT_FIELD, BOOKING_EXTRA_BEST_FIELD];
+  var REQUIRED_FIELDS = [DATE_FIELD, GDS_FIELD, ANY_TAG_FIELD, REAL_BOOKING_ANY_TAG_FIELD, ADMISSIBLE_FIELD, BOOKING_COUNT_FIELD, BOOKING_EXTRA_VS_BOOKED_FIELD];
 
   var ALL_TAB = "__all__";
 
@@ -119,7 +129,7 @@
       var realBookingAnyTag = numVal(row[REAL_BOOKING_ANY_TAG_FIELD]);
       var admissible = numVal(row[ADMISSIBLE_FIELD]);
       var bookingCount = numVal(row[BOOKING_COUNT_FIELD]);
-      var bookingExtraBestOnly = numVal(row[BOOKING_EXTRA_BEST_FIELD]);
+      var bookingExtraVsBooked = numVal(row[BOOKING_EXTRA_VS_BOOKED_FIELD]);
       return {
         date: date,
         gds: gds,
@@ -127,7 +137,7 @@
         realBookingAnyTag: realBookingAnyTag,
         admissible: admissible,
         bookingCount: bookingCount,
-        bookingExtraBestOnly: bookingExtraBestOnly,
+        bookingExtraVsBooked: bookingExtraVsBooked,
         realBookingPct: anyTag ? (100 * realBookingAnyTag) / anyTag : 0,
         admissiblePct: anyTag ? (100 * admissible) / anyTag : 0,
         bookingCountPct: admissible ? (100 * bookingCount) / admissible : 0,
@@ -140,7 +150,7 @@
     var realBookingAnyTag = rows.reduce(function (s, r) { return s + r.realBookingAnyTag; }, 0);
     var admissible = rows.reduce(function (s, r) { return s + r.admissible; }, 0);
     var bookingCount = rows.reduce(function (s, r) { return s + r.bookingCount; }, 0);
-    var bookingExtraBestOnly = rows.reduce(function (s, r) { return s + r.bookingExtraBestOnly; }, 0);
+    var bookingExtraVsBooked = rows.reduce(function (s, r) { return s + r.bookingExtraVsBooked; }, 0);
     return {
       date: "Total",
       gds: "",
@@ -148,7 +158,7 @@
       realBookingAnyTag: realBookingAnyTag,
       admissible: admissible,
       bookingCount: bookingCount,
-      bookingExtraBestOnly: bookingExtraBestOnly,
+      bookingExtraVsBooked: bookingExtraVsBooked,
       realBookingPct: anyTag ? (100 * realBookingAnyTag) / anyTag : 0,
       admissiblePct: anyTag ? (100 * admissible) / anyTag : 0,
       bookingCountPct: admissible ? (100 * bookingCount) / admissible : 0,
@@ -253,7 +263,7 @@
         '<th class="num" data-col="realBookingAnyTag">Attempts w/ Price &amp; Drop (Real Bookings)' + sortArrow("realBookingAnyTag") + "</th>" +
         '<th class="num" data-col="admissible">Admissible Candidates' + sortArrow("admissible") + "</th>" +
         '<th class="num" data-col="bookingCount">Booking Count' + sortArrow("bookingCount") + "</th>" +
-        '<th class="num" data-col="bookingExtraBestOnly">Booking Extra Rev. (Best Only)' + sortArrow("bookingExtraBestOnly") + "</th>";
+        '<th class="num" data-col="bookingExtraVsBooked">Booking Extra Rev. (vs. Booked)' + sortArrow("bookingExtraVsBooked") + "</th>";
 
       var colCount = showGdsCol ? 7 : 6;
 
@@ -265,7 +275,7 @@
         var realBookingCell = '<td class="num">' + fmtInt(r.realBookingAnyTag) + '<span class="pd-bfn-pct">(' + fmtPct(r.realBookingPct) + ")</span></td>";
         var admissibleCell = '<td class="num">' + fmtInt(r.admissible) + '<span class="pd-bfn-pct">(' + fmtPct(r.admissiblePct) + ")</span></td>";
         var bookingCountCell = '<td class="num">' + fmtInt(r.bookingCount) + '<span class="pd-bfn-pct">(' + fmtPct(r.bookingCountPct) + ")</span></td>";
-        var extraCell = '<td class="num' + (r.bookingExtraBestOnly >= 0 ? " pd-bfn-pos" : " pd-bfn-neg") + '">' + fmtMoney(r.bookingExtraBestOnly) + "</td>";
+        var extraCell = '<td class="num' + (r.bookingExtraVsBooked >= 0 ? " pd-bfn-pos" : " pd-bfn-neg") + '">' + fmtMoney(r.bookingExtraVsBooked) + "</td>";
         var keyCell;
         if (showGdsCol) {
           keyCell = isTotal
