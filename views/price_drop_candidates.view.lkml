@@ -242,8 +242,7 @@ view: price_drop_candidates {
     group_label: "2. CONTESTANT INFO"
     label: "Content Source"
     sql: ${TABLE}.gds ;;
-    suggestions: ["aerohub", "tiantai", "travelportplus", "gtsfly", "travelcaster"]
-    description: "Content source (GDS) that produced this candidate. Confirmed 2026-08-14 (ci_pricedrop_bot skill doc) to be one of 5 sources currently active for the Price & Drop simulation; a new source can appear before this list is updated."
+    description: "Content source (GDS) that produced this candidate. Why (2026-09-15, DS): removed the hardcoded suggestions: list (was ['aerohub','tiantai','travelportplus','gtsfly','travelcaster']) after it went stale the moment a new source ('voyzant') launched and didn't show up in the filter dropdown -- confirmed the tile data itself was fine, only the dropdown's autocomplete list was frozen at whatever 5 sources existed back on 2026-08-14. Without an explicit suggestions: list, Looker runs its own live distinct-values query to populate the dropdown instead, so a new content source appears automatically with no LookML change needed."
   }
 
   dimension: office {
