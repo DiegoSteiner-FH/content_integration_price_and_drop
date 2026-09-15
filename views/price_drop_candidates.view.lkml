@@ -242,7 +242,8 @@ view: price_drop_candidates {
     group_label: "2. CONTESTANT INFO"
     label: "Content Source"
     sql: ${TABLE}.gds ;;
-    description: "Content source (GDS) that produced this candidate. Why (2026-09-15, DS): removed the hardcoded suggestions: list (was ['aerohub','tiantai','travelportplus','gtsfly','travelcaster']) after it went stale the moment a new source ('voyzant') launched and didn't show up in the filter dropdown -- confirmed the tile data itself was fine, only the dropdown's autocomplete list was frozen at whatever 5 sources existed back on 2026-08-14. Without an explicit suggestions: list, Looker runs its own live distinct-values query to populate the dropdown instead, so a new content source appears automatically with no LookML change needed."
+    suggestions: ["aerohub", "tiantai", "travelportplus", "gtsfly", "travelcaster", "voyzant"]
+    description: "Content source (GDS) that produced this candidate. Why (2026-09-15, DS): briefly removed the hardcoded suggestions: list entirely (to let Looker's own live distinct-values query populate the dropdown instead) after it went stale the moment a new source ('voyzant') launched and didn't show up. Reverted back to a hardcoded list, voyzant added -- the fully dynamic version made this dropdown noticeably slow to open (a live SELECT DISTINCT gds against this view's own 30-day window-function derived table every time), and that latency cost wasn't worth the maintenance-free upside. A new content source will need to be added here manually again going forward, same as before."
   }
 
   dimension: office {
