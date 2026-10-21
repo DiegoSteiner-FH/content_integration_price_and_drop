@@ -182,6 +182,7 @@ view: price_drop_candidates {
         b.revenue,
         b.fare_type,
         b.currency,
+        UPPER(JSON_UNQUOTE(JSON_EXTRACT(oa.package, '$.info.currency'))) AS customer_currency,
         oa.affiliate_id,
         b.created_at,
         bk.booked_revenue,
@@ -273,9 +274,17 @@ view: price_drop_candidates {
   dimension: currency {
     type: string
     group_label: "2. CONTESTANT INFO"
-    label: "Currency"
+    label: "Pricing Currency"
     sql: ${TABLE}.currency ;;
-    description: "Candidate's own currency (ota.optimizer_candidates.currency) — read directly off MySQL, unlike ci_pricedrop_bot's report which pulls currency from ClickHouse jupiter_optimizer_attempt_summary because non-booked candidates have no bookability row."
+    description: "Candidate's own pricing currency, not the customer currency (see Customer Currency) (ota.optimizer_candidates.currency) — read directly off MySQL, unlike ci_pricedrop_bot's report which pulls currency from ClickHouse jupiter_optimizer_attempt_summary because non-booked candidates have no bookability row."
+  }
+
+  dimension: customer_currency {
+    type: string
+    group_label: "2. CONTESTANT INFO"
+    label: "Customer Currency"
+    sql: ${TABLE}.customer_currency ;;
+    description: "Currency shown to the customer on the search attempt (ota.optimizer_attempts.package JSON, $.info.currency, upper-cased). One value per attempt_id. Can differ from Pricing Currency: e.g. a CAD customer whose fare is priced on a USD office. Matched bookings.display_currency on 1,805 of 1,806 booked attempts checked 2026-10-21."
   }
 
   dimension: affiliate_id {
@@ -328,7 +337,8 @@ view: price_drop_candidates {
     allowed_value: { label: "Content Source" value: "gds" }
     allowed_value: { label: "Office" value: "office" }
     allowed_value: { label: "Validating Carrier" value: "carrier" }
-    allowed_value: { label: "Currency" value: "currency" }
+    allowed_value: { label: "Pricing Currency" value: "currency" }
+    allowed_value: { label: "Customer Currency" value: "customer_currency" }
     allowed_value: { label: "Fare Type" value: "fare_type" }
     allowed_value: { label: "Affiliate ID" value: "affiliate_id" }
     default_value: "gds"
@@ -344,6 +354,7 @@ view: price_drop_candidates {
         WHEN {% parameter breakdown_by %} = 'office' THEN ${office}
         WHEN {% parameter breakdown_by %} = 'carrier' THEN ${carrier}
         WHEN {% parameter breakdown_by %} = 'currency' THEN ${currency}
+        WHEN {% parameter breakdown_by %} = 'customer_currency' THEN ${customer_currency}
         WHEN {% parameter breakdown_by %} = 'fare_type' THEN ${fare_type}
         WHEN {% parameter breakdown_by %} = 'affiliate_id' THEN CAST(${affiliate_id} AS CHAR)
       END ;;
