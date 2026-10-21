@@ -116,7 +116,7 @@ view: price_drop_price_rate {
       WITH contestants AS (
         SELECT
           oc.id AS candidate_id, oc.attempt_id, oc.gds, oc.gds_account_id AS office_id,
-          oc.validating_carrier AS carrier, oc.fare_type, oc.currency, oa.affiliate_id,
+          oc.validating_carrier AS carrier, oc.fare_type, oc.currency, UPPER(JSON_UNQUOTE(JSON_EXTRACT(oa.package, '$.info.currency'))) AS customer_currency, oa.affiliate_id,
           oc.candidacy, oc.revenue, DATE(oc.created_at) AS d
         FROM ota.optimizer_candidates oc
         JOIN ota.optimizer_candidate_tags oct ON oct.candidate_id = oc.id
@@ -163,6 +163,7 @@ view: price_drop_price_rate {
         ct.carrier,
         ct.fare_type,
         ct.currency,
+        ct.customer_currency,
         ct.affiliate_id,
         CASE
           WHEN ct.revenue IS NULL THEN 'no_price'
@@ -173,7 +174,7 @@ view: price_drop_price_rate {
         COUNT(*) AS n
       FROM contestants ct
       LEFT JOIN best_eligible be ON be.attempt_id = ct.attempt_id
-      GROUP BY ct.d, ct.gds, ct.office_id, ct.carrier, ct.fare_type, ct.currency, ct.affiliate_id, outcome
+      GROUP BY ct.d, ct.gds, ct.office_id, ct.carrier, ct.fare_type, ct.currency, ct.customer_currency, ct.affiliate_id, outcome
     ;;
   }
 
@@ -236,9 +237,17 @@ view: price_drop_price_rate {
   dimension: currency {
     type: string
     group_label: "2. CONTESTANT INFO"
-    label: "Currency"
+    label: "Pricing Currency"
     sql: ${TABLE}.currency ;;
-    description: "Contestant's own currency (ota.optimizer_candidates.currency)."
+    description: "Contestant's own pricing currency, not the customer currency (see Customer Currency) (ota.optimizer_candidates.currency)."
+  }
+
+  dimension: customer_currency {
+    type: string
+    group_label: "2. CONTESTANT INFO"
+    label: "Customer Currency"
+    sql: ${TABLE}.customer_currency ;;
+    description: "Currency shown to the customer on the search attempt (ota.optimizer_attempts.package JSON, $.info.currency, upper-cased). One value per attempt_id. Can differ from Pricing Currency: e.g. a CAD customer whose fare is priced on a USD office. Matched bookings.display_currency on 1,805 of 1,806 booked attempts checked 2026-10-21."
   }
 
   dimension: affiliate_id {
